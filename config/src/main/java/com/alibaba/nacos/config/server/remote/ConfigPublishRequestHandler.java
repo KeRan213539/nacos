@@ -20,7 +20,10 @@ import com.alibaba.nacos.api.config.remote.request.ConfigPublishRequest;
 import com.alibaba.nacos.api.config.remote.response.ConfigPubishResponse;
 import com.alibaba.nacos.api.exception.NacosException;
 import com.alibaba.nacos.api.remote.request.RequestMeta;
-import com.alibaba.nacos.common.utils.MapUtils;
+import com.alibaba.nacos.auth.annotation.Secured;
+import com.alibaba.nacos.auth.common.ActionTypes;
+import com.alibaba.nacos.common.utils.MapUtil;
+import com.alibaba.nacos.config.server.auth.ConfigResourceParser;
 import com.alibaba.nacos.config.server.model.ConfigInfo;
 import com.alibaba.nacos.config.server.model.event.ConfigDataChangeEvent;
 import com.alibaba.nacos.config.server.service.AggrWhitelist;
@@ -30,10 +33,9 @@ import com.alibaba.nacos.config.server.service.trace.ConfigTraceService;
 import com.alibaba.nacos.config.server.utils.ParamUtils;
 import com.alibaba.nacos.config.server.utils.TimeUtils;
 import com.alibaba.nacos.core.remote.RequestHandler;
-import com.alibaba.nacos.core.utils.InetUtils;
 import com.alibaba.nacos.core.utils.Loggers;
+import com.alibaba.nacos.sys.utils.InetUtils;
 import org.apache.commons.lang3.StringUtils;
-import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
 
 import java.sql.Timestamp;
@@ -49,45 +51,49 @@ import java.util.Map;
 @Component
 public class ConfigPublishRequestHandler extends RequestHandler<ConfigPublishRequest, ConfigPubishResponse> {
     
-    @Autowired
-    private PersistService persistService;
+    private final PersistService persistService;
+    
+    public ConfigPublishRequestHandler(PersistService persistService) {
+        this.persistService = persistService;
+    }
     
     @Override
-    public ConfigPubishResponse handle(ConfigPublishRequest myRequest, RequestMeta meta) throws NacosException {
+    @Secured(action = ActionTypes.WRITE, resource = "", parser = ConfigResourceParser.class)
+    public ConfigPubishResponse handle(ConfigPublishRequest request, RequestMeta meta) throws NacosException {
         
         try {
-            String dataId = myRequest.getDataId();
-            String group = myRequest.getGroup();
-            String content = myRequest.getContent();
-            final String tenant = myRequest.getTenant();
+            String dataId = request.getDataId();
+            String group = request.getGroup();
+            String content = request.getContent();
+            final String tenant = request.getTenant();
             
             final String srcIp = meta.getClientIp();
-            final String requestIpApp = myRequest.getAdditionParam("requestIpApp");
-            final String tag = myRequest.getAdditionParam("tag");
-            final String appName = myRequest.getAdditionParam("appName");
-            final String type = myRequest.getAdditionParam("type");
-            final String srcUser = myRequest.getAdditionParam("src_user");
+            final String requestIpApp = request.getAdditionParam("requestIpApp");
+            final String tag = request.getAdditionParam("tag");
+            final String appName = request.getAdditionParam("appName");
+            final String type = request.getAdditionParam("type");
+            final String srcUser = request.getAdditionParam("src_user");
             
             // check tenant
             ParamUtils.checkParam(dataId, group, "datumId", content);
             ParamUtils.checkParam(tag);
             Map<String, Object> configAdvanceInfo = new HashMap<String, Object>(10);
-            MapUtils.putIfValNoNull(configAdvanceInfo, "config_tags", myRequest.getAdditionParam("configTags"));
-            MapUtils.putIfValNoNull(configAdvanceInfo, "desc", myRequest.getAdditionParam("desc"));
-            MapUtils.putIfValNoNull(configAdvanceInfo, "use", myRequest.getAdditionParam("use"));
-            MapUtils.putIfValNoNull(configAdvanceInfo, "effect", myRequest.getAdditionParam("effect"));
-            MapUtils.putIfValNoNull(configAdvanceInfo, "type", type);
-            MapUtils.putIfValNoNull(configAdvanceInfo, "schema", myRequest.getAdditionParam("schema"));
+            MapUtil.putIfValNoNull(configAdvanceInfo, "config_tags", request.getAdditionParam("configTags"));
+            MapUtil.putIfValNoNull(configAdvanceInfo, "desc", request.getAdditionParam("desc"));
+            MapUtil.putIfValNoNull(configAdvanceInfo, "use", request.getAdditionParam("use"));
+            MapUtil.putIfValNoNull(configAdvanceInfo, "effect", request.getAdditionParam("effect"));
+            MapUtil.putIfValNoNull(configAdvanceInfo, "type", type);
+            MapUtil.putIfValNoNull(configAdvanceInfo, "schema", request.getAdditionParam("schema"));
             ParamUtils.checkParam(configAdvanceInfo);
             
             if (AggrWhitelist.isAggrDataId(dataId)) {
-                Loggers.RPC_DIGEST
+                Loggers.REMOTE_DIGEST
                         .warn("[aggr-conflict] {} attemp to publish single data, {}, {}", srcIp, dataId, group);
                 throw new NacosException(NacosException.NO_RIGHT, "dataId:" + dataId + " is aggr");
             }
             
             final Timestamp time = TimeUtils.getCurrentTime();
-            String betaIps = myRequest.getAdditionParam("betaIps");
+            String betaIps = request.getAdditionParam("betaIps");
             ConfigInfo configInfo = new ConfigInfo(dataId, group, tenant, appName, content);
             configInfo.setType(type);
             if (StringUtils.isBlank(betaIps)) {
@@ -107,11 +113,11 @@ public class ConfigPublishRequestHandler extends RequestHandler<ConfigPublishReq
                         .notifyConfigChange(new ConfigDataChangeEvent(true, dataId, group, tenant, time.getTime()));
             }
             ConfigTraceService
-                    .logPersistenceEvent(dataId, group, tenant, requestIpApp, time.getTime(), InetUtils.getSelfIp(),
+                    .logPersistenceEvent(dataId, group, tenant, requestIpApp, time.getTime(), InetUtils.getSelfIP(),
                             ConfigTraceService.PERSISTENCE_EVENT_PUB, content);
             return ConfigPubishResponse.buildSuccessResponse();
         } catch (Exception e) {
-            Loggers.RPC_DIGEST.error("[ConfigPublishRequestHandler] publish config error ,request ={}", myRequest);
+            Loggers.REMOTE_DIGEST.error("[ConfigPublishRequestHandler] publish config error ,request ={}", request, e);
             return ConfigPubishResponse.buildFailResponse(e.getMessage());
         }
     }

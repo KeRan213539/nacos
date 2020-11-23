@@ -21,6 +21,9 @@ import com.alibaba.nacos.api.config.remote.response.ConfigQueryResponse;
 import com.alibaba.nacos.api.exception.NacosException;
 import com.alibaba.nacos.api.remote.request.RequestMeta;
 import com.alibaba.nacos.api.remote.response.ResponseCode;
+import com.alibaba.nacos.auth.annotation.Secured;
+import com.alibaba.nacos.auth.common.ActionTypes;
+import com.alibaba.nacos.config.server.auth.ConfigResourceParser;
 import com.alibaba.nacos.config.server.constant.Constants;
 import com.alibaba.nacos.config.server.model.CacheItem;
 import com.alibaba.nacos.config.server.model.ConfigInfoBase;
@@ -34,7 +37,6 @@ import com.alibaba.nacos.config.server.utils.PropertyUtil;
 import com.alibaba.nacos.config.server.utils.TimeUtils;
 import com.alibaba.nacos.core.remote.RequestHandler;
 import org.apache.commons.lang3.StringUtils;
-import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
 
 import java.io.BufferedReader;
@@ -60,10 +62,14 @@ public class ConfigQueryRequestHandler extends RequestHandler<ConfigQueryRequest
     
     private static final int TRY_GET_LOCK_TIMES = 9;
     
-    @Autowired
-    private PersistService persistService;
+    private final PersistService persistService;
+    
+    public ConfigQueryRequestHandler(PersistService persistService) {
+        this.persistService = persistService;
+    }
     
     @Override
+    @Secured(action = ActionTypes.READ, parser = ConfigResourceParser.class)
     public ConfigQueryResponse handle(ConfigQueryRequest request, RequestMeta requestMeta) throws NacosException {
         ConfigQueryRequest configQueryRequest = (ConfigQueryRequest) request;
         
@@ -73,7 +79,7 @@ public class ConfigQueryRequestHandler extends RequestHandler<ConfigQueryRequest
         String clientIp = requestMeta.getClientIp();
         try {
             ConfigQueryResponse context = getContext(dataId, group, tenant, configQueryRequest.getTag(),
-                    requestMeta.getClientIp(), requestMeta);
+                    requestMeta.getClientIp(), requestMeta, request.isNotify());
             return context;
         } catch (Exception e) {
             ConfigQueryResponse contextFail = ConfigQueryResponse
@@ -84,10 +90,10 @@ public class ConfigQueryRequestHandler extends RequestHandler<ConfigQueryRequest
     }
     
     private ConfigQueryResponse getContext(String dataId, String group, String tenant, String tag, String clientIp,
-            RequestMeta meta) throws UnsupportedEncodingException {
+            RequestMeta meta, boolean notify) throws UnsupportedEncodingException {
         
         ConfigQueryResponse response = new ConfigQueryResponse();
-        
+    
         final String groupKey = GroupKey2.getKey(dataId, group, tenant);
         
         String autoTag = meta.getLabels().get("Vipserver-Tag");
@@ -155,14 +161,13 @@ public class ConfigQueryRequestHandler extends RequestHandler<ConfigQueryRequest
                                 // FIXME CacheItem
                                 // No longer exists. It is impossible to simply calculate the push delayed. Here, simply record it as - 1.
                                 ConfigTraceService.logPullEvent(dataId, group, tenant, requestIpApp, -1,
-                                        ConfigTraceService.PULL_EVENT_NOTFOUND, -1, clientIp);
+                                        ConfigTraceService.PULL_EVENT_NOTFOUND, -1, clientIp, false);
                                 
                                 // pullLog.info("[client-get] clientIp={}, {},
                                 // no data",
                                 // new Object[]{clientIp, groupKey});
-                                
-                                response.setErrorCode(ConfigQueryResponse.CONFIG_NOT_FOUND);
-                                response.setMessage("config data not exist");
+    
+                                response.setErrorInfo(ConfigQueryResponse.CONFIG_NOT_FOUND, "config data not exist");
                                 return response;
                             }
                         }
@@ -187,14 +192,13 @@ public class ConfigQueryRequestHandler extends RequestHandler<ConfigQueryRequest
                             // FIXME CacheItem
                             // No longer exists. It is impossible to simply calculate the push delayed. Here, simply record it as - 1.
                             ConfigTraceService.logPullEvent(dataId, group, tenant, requestIpApp, -1,
-                                    ConfigTraceService.PULL_EVENT_NOTFOUND, -1, clientIp);
+                                    ConfigTraceService.PULL_EVENT_NOTFOUND, -1, clientIp, false);
                             
                             // pullLog.info("[client-get] clientIp={}, {},
                             // no data",
                             // new Object[]{clientIp, groupKey});
-                            
-                            response.setErrorCode(ConfigQueryResponse.CONFIG_NOT_FOUND);
-                            response.setMessage("config data not exist");
+    
+                            response.setErrorInfo(ConfigQueryResponse.CONFIG_NOT_FOUND, "config data not exist");
                             return response;
                             
                         }
@@ -227,7 +231,7 @@ public class ConfigQueryRequestHandler extends RequestHandler<ConfigQueryRequest
                  because the delayed value of active get requests is very large.
                  */
                 ConfigTraceService.logPullEvent(dataId, group, tenant, requestIpApp, lastModified,
-                        ConfigTraceService.PULL_EVENT_OK, delayed, clientIp);
+                        ConfigTraceService.PULL_EVENT_OK, delayed, clientIp, notify);
                 
             } finally {
                 releaseConfigReadLock(groupKey);
@@ -237,15 +241,13 @@ public class ConfigQueryRequestHandler extends RequestHandler<ConfigQueryRequest
             // FIXME CacheItem No longer exists. It is impossible to simply calculate the push delayed. Here, simply record it as - 1.
             ConfigTraceService
                     .logPullEvent(dataId, group, tenant, requestIpApp, -1, ConfigTraceService.PULL_EVENT_NOTFOUND, -1,
-                            clientIp);
-            
-            response.setErrorCode(ConfigQueryResponse.CONFIG_NOT_FOUND);
-            response.setMessage("config data not exist");
+                            clientIp, notify);
+            response.setErrorInfo(ConfigQueryResponse.CONFIG_NOT_FOUND, "config data not exist");
             
         } else {
             PULL_LOG.info("[client-get] clientIp={}, {}, get data during dump", clientIp, groupKey);
-            response.setErrorCode(ConfigQueryResponse.CONFIG_QUERY_CONFLICT);
-            response.setMessage("requested file is being modified, please try later.");
+            response.setErrorInfo(ConfigQueryResponse.CONFIG_QUERY_CONFLICT,
+                    "requested file is being modified, please try later.");
         }
         return response;
     }

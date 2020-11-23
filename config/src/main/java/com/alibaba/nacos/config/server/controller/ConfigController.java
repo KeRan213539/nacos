@@ -16,11 +16,12 @@
 
 package com.alibaba.nacos.config.server.controller;
 
+import com.alibaba.nacos.api.config.ConfigType;
 import com.alibaba.nacos.api.exception.NacosException;
 import com.alibaba.nacos.auth.annotation.Secured;
 import com.alibaba.nacos.auth.common.ActionTypes;
 import com.alibaba.nacos.common.model.RestResult;
-import com.alibaba.nacos.common.utils.MapUtils;
+import com.alibaba.nacos.common.utils.MapUtil;
 import com.alibaba.nacos.config.server.auth.ConfigResourceParser;
 import com.alibaba.nacos.config.server.constant.Constants;
 import com.alibaba.nacos.config.server.controller.parameters.SameNamespaceCloneConfigBean;
@@ -32,20 +33,21 @@ import com.alibaba.nacos.config.server.model.GroupkeyListenserStatus;
 import com.alibaba.nacos.config.server.model.Page;
 import com.alibaba.nacos.config.server.model.SameConfigPolicy;
 import com.alibaba.nacos.config.server.model.SampleResult;
+import com.alibaba.nacos.config.server.model.event.ConfigDataChangeEvent;
 import com.alibaba.nacos.config.server.result.ResultBuilder;
 import com.alibaba.nacos.config.server.result.code.ResultCodeEnum;
 import com.alibaba.nacos.config.server.service.AggrWhitelist;
-import com.alibaba.nacos.config.server.model.event.ConfigDataChangeEvent;
 import com.alibaba.nacos.config.server.service.ConfigChangePublisher;
 import com.alibaba.nacos.config.server.service.ConfigSubService;
 import com.alibaba.nacos.config.server.service.repository.PersistService;
 import com.alibaba.nacos.config.server.service.trace.ConfigTraceService;
 import com.alibaba.nacos.config.server.utils.MD5Util;
+import com.alibaba.nacos.config.server.utils.NamespaceUtil;
 import com.alibaba.nacos.config.server.utils.ParamUtils;
 import com.alibaba.nacos.config.server.utils.RequestUtil;
 import com.alibaba.nacos.config.server.utils.TimeUtils;
 import com.alibaba.nacos.config.server.utils.ZipUtils;
-import com.alibaba.nacos.core.utils.InetUtils;
+import com.alibaba.nacos.sys.utils.InetUtils;
 import org.apache.commons.lang3.StringUtils;
 import org.apache.commons.lang3.time.DateFormatUtils;
 import org.slf4j.Logger;
@@ -90,8 +92,6 @@ public class ConfigController {
     
     private static final Logger LOGGER = LoggerFactory.getLogger(ConfigController.class);
     
-    private static final String NAMESPACE_PUBLIC_KEY = "public";
-    
     private static final String EXPORT_CONFIG_FILE_NAME = "nacos_config_export_";
     
     private static final String EXPORT_CONFIG_FILE_NAME_EXT = ".zip";
@@ -135,17 +135,21 @@ public class ConfigController {
         final String srcIp = RequestUtil.getRemoteIp(request);
         final String requestIpApp = RequestUtil.getAppName(request);
         srcUser = RequestUtil.getSrcUserName(request);
+        //check type
+        if (!ConfigType.isValidType(type)) {
+            type = ConfigType.getDefaultType().getType();
+        }
         // check tenant
         ParamUtils.checkTenant(tenant);
         ParamUtils.checkParam(dataId, group, "datumId", content);
         ParamUtils.checkParam(tag);
         Map<String, Object> configAdvanceInfo = new HashMap<String, Object>(10);
-        MapUtils.putIfValNoNull(configAdvanceInfo, "config_tags", configTags);
-        MapUtils.putIfValNoNull(configAdvanceInfo, "desc", desc);
-        MapUtils.putIfValNoNull(configAdvanceInfo, "use", use);
-        MapUtils.putIfValNoNull(configAdvanceInfo, "effect", effect);
-        MapUtils.putIfValNoNull(configAdvanceInfo, "type", type);
-        MapUtils.putIfValNoNull(configAdvanceInfo, "schema", schema);
+        MapUtil.putIfValNoNull(configAdvanceInfo, "config_tags", configTags);
+        MapUtil.putIfValNoNull(configAdvanceInfo, "desc", desc);
+        MapUtil.putIfValNoNull(configAdvanceInfo, "use", use);
+        MapUtil.putIfValNoNull(configAdvanceInfo, "effect", effect);
+        MapUtil.putIfValNoNull(configAdvanceInfo, "type", type);
+        MapUtil.putIfValNoNull(configAdvanceInfo, "schema", schema);
         ParamUtils.checkParam(configAdvanceInfo);
         
         if (AggrWhitelist.isAggrDataId(dataId)) {
@@ -175,7 +179,7 @@ public class ConfigController {
                     .notifyConfigChange(new ConfigDataChangeEvent(true, dataId, group, tenant, time.getTime()));
         }
         ConfigTraceService
-                .logPersistenceEvent(dataId, group, tenant, requestIpApp, time.getTime(), InetUtils.getSelfIp(),
+                .logPersistenceEvent(dataId, group, tenant, requestIpApp, time.getTime(), InetUtils.getSelfIP(),
                         ConfigTraceService.PERSISTENCE_EVENT_PUB, content);
         return true;
     }
@@ -196,7 +200,7 @@ public class ConfigController {
             throws IOException, ServletException, NacosException {
         // check tenant
         ParamUtils.checkTenant(tenant);
-        tenant = processTenant(tenant);
+        tenant = NamespaceUtil.processNamespaceParameter(tenant);
         // check params
         ParamUtils.checkParam(dataId, group, "datumId", "content");
         ParamUtils.checkParam(tag);
@@ -307,7 +311,8 @@ public class ConfigController {
         if (StringUtils.isBlank(probeModify)) {
             throw new IllegalArgumentException("invalid probeModify");
         }
-        
+        request.removeAttribute("body");
+
         probeModify = URLDecoder.decode(probeModify, Constants.ENCODE);
         
         Map<String, String> clientMd5Map;
@@ -469,7 +474,7 @@ public class ConfigController {
             @RequestParam(value = "tenant", required = false, defaultValue = StringUtils.EMPTY) String tenant,
             @RequestParam(value = "ids", required = false) List<Long> ids) {
         ids.removeAll(Collections.singleton(null));
-        tenant = processTenant(tenant);
+        tenant = NamespaceUtil.processNamespaceParameter(tenant);
         List<ConfigAllInfo> dataList = persistService.findAllConfigInfo4Export(dataId, group, tenant, appName, ids);
         List<ZipUtils.ZipItem> zipItemList = new ArrayList<>();
         StringBuilder metaData = null;
@@ -527,12 +532,12 @@ public class ConfigController {
             return ResultBuilder.buildResult(ResultCodeEnum.DATA_EMPTY, failedData);
         }
         
-        if (StringUtils.isNotBlank(namespace)) {
-            if (persistService.tenantInfoCountByTenantId(namespace) <= 0) {
-                failedData.put("succCount", 0);
-                return ResultBuilder.buildResult(ResultCodeEnum.NAMESPACE_NOT_EXIST, failedData);
-            }
+        namespace = NamespaceUtil.processNamespaceParameter(namespace);
+        if (StringUtils.isNotBlank(namespace) && persistService.tenantInfoCountByTenantId(namespace) <= 0) {
+            failedData.put("succCount", 0);
+            return ResultBuilder.buildResult(ResultCodeEnum.NAMESPACE_NOT_EXIST, failedData);
         }
+        
         List<ConfigAllInfo> configInfoList = null;
         try {
             ZipUtils.UnZipResult unziped = ZipUtils.unzip(file.getBytes());
@@ -598,7 +603,7 @@ public class ConfigController {
                             configInfo.getTenant(), time.getTime()));
             ConfigTraceService
                     .logPersistenceEvent(configInfo.getDataId(), configInfo.getGroup(), configInfo.getTenant(),
-                            requestIpApp, time.getTime(), InetUtils.getSelfIp(),
+                            requestIpApp, time.getTime(), InetUtils.getSelfIP(),
                             ConfigTraceService.PERSISTENCE_EVENT_PUB, configInfo.getContent());
         }
         return ResultBuilder.buildSuccessResult("导入成功", saveResult);
@@ -628,10 +633,9 @@ public class ConfigController {
             return ResultBuilder.buildResult(ResultCodeEnum.NO_SELECTED_CONFIG, failedData);
         }
         configBeansList.removeAll(Collections.singleton(null));
-        
-        if (NAMESPACE_PUBLIC_KEY.equalsIgnoreCase(namespace)) {
-            namespace = "";
-        } else if (persistService.tenantInfoCountByTenantId(namespace) <= 0) {
+    
+        namespace = NamespaceUtil.processNamespaceParameter(namespace);
+        if (StringUtils.isNotBlank(namespace) && persistService.tenantInfoCountByTenantId(namespace) <= 0) {
             failedData.put("succCount", 0);
             return ResultBuilder.buildResult(ResultCodeEnum.NAMESPACE_NOT_EXIST, failedData);
         }
@@ -684,17 +688,10 @@ public class ConfigController {
                             configInfo.getTenant(), time.getTime()));
             ConfigTraceService
                     .logPersistenceEvent(configInfo.getDataId(), configInfo.getGroup(), configInfo.getTenant(),
-                            requestIpApp, time.getTime(), InetUtils.getSelfIp(),
+                            requestIpApp, time.getTime(), InetUtils.getSelfIP(),
                             ConfigTraceService.PERSISTENCE_EVENT_PUB, configInfo.getContent());
         }
         return ResultBuilder.buildSuccessResult("Clone Completed Successfully", saveResult);
-    }
-    
-    private String processTenant(String tenant) {
-        if (StringUtils.isEmpty(tenant) || NAMESPACE_PUBLIC_KEY.equalsIgnoreCase(tenant)) {
-            return "";
-        }
-        return tenant;
     }
     
 }

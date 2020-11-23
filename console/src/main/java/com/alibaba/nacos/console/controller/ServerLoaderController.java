@@ -17,12 +17,17 @@
 package com.alibaba.nacos.console.controller;
 
 import com.alibaba.nacos.api.exception.NacosException;
-import com.alibaba.nacos.api.remote.request.Request;
 import com.alibaba.nacos.api.remote.request.RequestMeta;
 import com.alibaba.nacos.api.remote.request.ServerLoaderInfoRequest;
+import com.alibaba.nacos.api.remote.request.ServerReloadRequest;
 import com.alibaba.nacos.api.remote.response.ServerLoaderInfoResponse;
+import com.alibaba.nacos.api.remote.response.ServerReloadResponse;
+import com.alibaba.nacos.auth.annotation.Secured;
+import com.alibaba.nacos.auth.common.ActionTypes;
 import com.alibaba.nacos.common.executor.ExecutorFactory;
+import com.alibaba.nacos.common.utils.StringUtils;
 import com.alibaba.nacos.config.server.utils.LogUtil;
+import com.alibaba.nacos.console.security.nacos.NacosAuthConfig;
 import com.alibaba.nacos.core.cluster.Member;
 import com.alibaba.nacos.core.cluster.MemberUtils;
 import com.alibaba.nacos.core.cluster.ServerMemberManager;
@@ -30,6 +35,8 @@ import com.alibaba.nacos.core.cluster.remote.ClusterRpcClientProxy;
 import com.alibaba.nacos.core.remote.Connection;
 import com.alibaba.nacos.core.remote.ConnectionManager;
 import com.alibaba.nacos.core.remote.core.ServerLoaderInfoRequestHandler;
+import com.alibaba.nacos.core.utils.RemoteUtils;
+import org.apache.commons.lang3.math.NumberUtils;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -73,11 +80,23 @@ public class ServerLoaderController {
     @Autowired
     private ServerLoaderInfoRequestHandler serverLoaderInfoRequestHandler;
     
+    static ScheduledExecutorService executorService = ExecutorFactory
+            .newScheduledExecutorService(Runtime.getRuntime().availableProcessors(), new ThreadFactory() {
+                @Override
+                public Thread newThread(Runnable r) {
+                    String threadName = "nacos.core.server.cluster.Thread";
+                    Thread thread = new Thread(r, threadName);
+                    thread.setDaemon(true);
+                    return thread;
+                }
+            });
+    
     /**
      * Get server state of current server.
      *
      * @return state json.
      */
+    @Secured(resource = NacosAuthConfig.CONSOLE_RESOURCE_NAME_PREFIX + "loader", action = ActionTypes.WRITE)
     @GetMapping("/max")
     public ResponseEntity updateMaxClients(@RequestParam Integer count) {
         Map<String, String> responseMap = new HashMap<>(3);
@@ -90,6 +109,7 @@ public class ServerLoaderController {
      *
      * @return state json.
      */
+    @Secured(resource = NacosAuthConfig.CONSOLE_RESOURCE_NAME_PREFIX + "loader", action = ActionTypes.WRITE)
     @GetMapping("/reload")
     public ResponseEntity reloadCount(@RequestParam Integer count,
             @RequestParam(value = "redirectAddress", required = false) String redirectAddress) {
@@ -103,6 +123,7 @@ public class ServerLoaderController {
      *
      * @return state json.
      */
+    @Secured(resource = NacosAuthConfig.CONSOLE_RESOURCE_NAME_PREFIX + "loader", action = ActionTypes.WRITE)
     @GetMapping("/reloadsingle")
     public ResponseEntity reloadSingle(@RequestParam String connectionId,
             @RequestParam(value = "redirectAddress", required = false) String redirectAddress) {
@@ -116,6 +137,7 @@ public class ServerLoaderController {
      *
      * @return state json.
      */
+    @Secured(resource = NacosAuthConfig.CONSOLE_RESOURCE_NAME_PREFIX + "loader", action = ActionTypes.READ)
     @GetMapping("/current")
     public ResponseEntity currentClients() {
         Map<String, String> responseMap = new HashMap<>(3);
@@ -129,25 +151,68 @@ public class ServerLoaderController {
      *
      * @return state json.
      */
-    @GetMapping("/clustermetric")
-    public ResponseEntity clusterLoader() {
-        
-        Map<String, String> responseMap = new HashMap<>(3);
-        return ResponseEntity.ok().body(getMetrics());
+    @Secured(resource = NacosAuthConfig.CONSOLE_RESOURCE_NAME_PREFIX + "loader", action = ActionTypes.READ)
+    @GetMapping("/reloadcluster")
+    public ResponseEntity reloadCluster(@RequestParam Integer count) {
+        String result = "ok";
+        Map<String, Object> serverLoadMetrics = getServerLoadMetrics();
+        Object avgString = (Object) serverLoadMetrics.get("avg");
+        if (avgString != null && NumberUtils.isDigits(avgString.toString())) {
+            int avg = Integer.valueOf(avgString.toString());
+            if (count < avg * RemoteUtils.LOADER_FACTOR + 1) {
+                result = " loader count must be 10% larger than avg,avg current is " + avg;
+            } else {
+                reloadClusterInner(count);
+            }
+        } else {
+            result = "can't get cluster metric";
+        }
+        return ResponseEntity.ok().body(result);
     }
     
-    private List<ServerLoaderMetris> getMetrics() {
+    private void reloadClusterInner(int reloadcount) {
         
-        ScheduledExecutorService executorService = ExecutorFactory
-                .newScheduledExecutorService(Runtime.getRuntime().availableProcessors(), new ThreadFactory() {
-                    @Override
-                    public Thread newThread(Runnable r) {
-                        String threadName = "nacos.core.server.cluster.Thread";
-                        Thread thread = new Thread(r, threadName);
-                        thread.setDaemon(true);
-                        return thread;
-                    }
-                });
+        CompletionService<ServerReloadResponse> completionService = new ExecutorCompletionService<ServerReloadResponse>(
+                executorService);
+        ServerReloadRequest serverLoaderInfoRequest = new ServerReloadRequest();
+        serverLoaderInfoRequest.setReloadCount(reloadcount);
+        int count = 0;
+        for (Member member : serverMemberManager.allMembersWithoutSelf()) {
+            if (MemberUtils.isSupportedLongCon(member)) {
+                count++;
+                completionService.submit(new ServerReLoaderRpcTask(serverLoaderInfoRequest, member));
+            }
+        }
+        
+        List<ServerLoaderMetris> responseList = new LinkedList<ServerLoaderMetris>();
+        
+        try {
+            ServerLoaderInfoResponse handle = serverLoaderInfoRequestHandler
+                    .handle(new ServerLoaderInfoRequest(), new RequestMeta());
+            ServerLoaderMetris metris = new ServerLoaderMetris();
+            metris.setAddress(serverMemberManager.getSelf().getAddress());
+            metris.setMetric(handle.getLoaderMetrics());
+            responseList.add(metris);
+        } catch (NacosException e) {
+            e.printStackTrace();
+        }
+    }
+    
+    /**
+     * Get current clients.
+     *
+     * @return state json.
+     */
+    @Secured(resource = NacosAuthConfig.CONSOLE_RESOURCE_NAME_PREFIX + "loader", action = ActionTypes.READ)
+    @GetMapping("/clustermetric")
+    public ResponseEntity clusterLoader() {
+    
+        Map<String, Object> serverLoadMetrics = getServerLoadMetrics();
+    
+        return ResponseEntity.ok().body(serverLoadMetrics);
+    }
+    
+    private Map<String, Object> getServerLoadMetrics() {
         
         CompletionService<ServerLoaderMetris> completionService = new ExecutorCompletionService<ServerLoaderMetris>(
                 executorService);
@@ -157,7 +222,7 @@ public class ServerLoaderController {
             if (MemberUtils.isSupportedLongCon(member)) {
                 count++;
                 ServerLoaderInfoRequest serverLoaderInfoRequest = new ServerLoaderInfoRequest();
-                completionService.submit(new RpcTask<ServerLoaderInfoRequest>(serverLoaderInfoRequest, member));
+                completionService.submit(new ServerLoaderInfoRpcTask(serverLoaderInfoRequest, member));
             }
         }
         
@@ -196,17 +261,44 @@ public class ServerLoaderController {
             }
         }
         
-        return responseList;
+        Map<String, Object> responseMap = new HashMap<>(3);
+        
+        responseMap.put("detail", responseList);
+        int max = 0;
+        int min = -1;
+        int total = 0;
+        
+        for (ServerLoaderMetris serverLoaderMetris : responseList) {
+            String sdkConCountStr = serverLoaderMetris.getMetric().get("sdkConCount");
+            
+            if (StringUtils.isNotBlank(sdkConCountStr)) {
+                int sdkConCount = Integer.valueOf(sdkConCountStr);
+                if (max == 0 || max < sdkConCount) {
+                    max = sdkConCount;
+                }
+                if (min == -1 || sdkConCount < min) {
+                    min = sdkConCount;
+                }
+                total += sdkConCount;
+            }
+        }
+        responseMap.put("max", max);
+        responseMap.put("min", min);
+        responseMap.put("avg", total / responseList.size());
+        responseMap.put("threshold", total / responseList.size() * 1.1);
+        responseMap.put("total", total);
+        
+        return responseMap;
         
     }
     
-    class RpcTask<T extends Request> implements Callable<ServerLoaderMetris> {
+    class ServerLoaderInfoRpcTask implements Callable<ServerLoaderMetris> {
         
-        T request;
+        ServerLoaderInfoRequest request;
         
         Member member;
         
-        public RpcTask(T t, Member member) {
+        public ServerLoaderInfoRpcTask(ServerLoaderInfoRequest t, Member member) {
             this.request = t;
             this.member = member;
         }
@@ -263,6 +355,26 @@ public class ServerLoaderController {
          */
         public void setMetric(Map<String, String> metric) {
             this.metric = metric;
+        }
+    }
+    
+    class ServerReLoaderRpcTask implements Callable<ServerReloadResponse> {
+        
+        ServerReloadRequest request;
+        
+        Member member;
+        
+        public ServerReLoaderRpcTask(ServerReloadRequest t, Member member) {
+            this.request = t;
+            this.member = member;
+        }
+        
+        @Override
+        public ServerReloadResponse call() throws Exception {
+            
+            ServerReloadResponse response = (ServerReloadResponse) clusterRpcClientProxy
+                    .sendRequest(this.member, this.request);
+            return response;
         }
     }
 }

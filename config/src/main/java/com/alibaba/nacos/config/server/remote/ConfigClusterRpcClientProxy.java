@@ -17,12 +17,10 @@
 package com.alibaba.nacos.config.server.remote;
 
 import com.alibaba.nacos.api.config.remote.request.cluster.ConfigChangeClusterSyncRequest;
-import com.alibaba.nacos.api.config.remote.response.cluster.ConfigChangeClusterSyncResponse;
 import com.alibaba.nacos.api.exception.NacosException;
-import com.alibaba.nacos.api.remote.response.Response;
+import com.alibaba.nacos.api.remote.RequestCallBack;
 import com.alibaba.nacos.core.cluster.Member;
 import com.alibaba.nacos.core.cluster.remote.ClusterRpcClientProxy;
-import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 
 /**
@@ -34,23 +32,24 @@ import org.springframework.stereotype.Service;
 @Service
 public class ConfigClusterRpcClientProxy {
     
-    @Autowired
-    ClusterRpcClientProxy clusterRpcClientProxy;
+    final ClusterRpcClientProxy clusterRpcClientProxy;
+    
+    public ConfigClusterRpcClientProxy(ClusterRpcClientProxy clusterRpcClientProxy) {
+        this.clusterRpcClientProxy = clusterRpcClientProxy;
+    }
     
     /**
      * sync config change request.
-     * @param member
-     * @param request
-     * @return
+     *
+     * @param member  member of server.
+     * @param request request of config change sync.
+     * @param callBack callBack of config change sync.
      * @throws NacosException exception.
      */
-    public ConfigChangeClusterSyncResponse syncConfigChange(Member member, ConfigChangeClusterSyncRequest request)
+    public void syncConfigChange(Member member, ConfigChangeClusterSyncRequest request, RequestCallBack callBack)
             throws NacosException {
+    
+        clusterRpcClientProxy.asyncRequest(member, request, callBack);
         
-        Response response = clusterRpcClientProxy.sendRequest(member, request);
-        if (response != null && response instanceof ConfigChangeClusterSyncResponse) {
-            return (ConfigChangeClusterSyncResponse) response;
-        }
-        return null;
     }
 }

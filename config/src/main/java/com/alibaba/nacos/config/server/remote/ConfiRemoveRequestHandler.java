@@ -20,6 +20,9 @@ import com.alibaba.nacos.api.config.remote.request.ConfigRemoveRequest;
 import com.alibaba.nacos.api.config.remote.response.ConfigRemoveResponse;
 import com.alibaba.nacos.api.exception.NacosException;
 import com.alibaba.nacos.api.remote.request.RequestMeta;
+import com.alibaba.nacos.auth.annotation.Secured;
+import com.alibaba.nacos.auth.common.ActionTypes;
+import com.alibaba.nacos.config.server.auth.ConfigResourceParser;
 import com.alibaba.nacos.config.server.model.event.ConfigDataChangeEvent;
 import com.alibaba.nacos.config.server.service.ConfigChangePublisher;
 import com.alibaba.nacos.config.server.service.repository.PersistService;
@@ -29,7 +32,6 @@ import com.alibaba.nacos.config.server.utils.TimeUtils;
 import com.alibaba.nacos.core.remote.RequestHandler;
 import com.alibaba.nacos.core.utils.Loggers;
 import org.apache.commons.lang3.StringUtils;
-import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
 
 import java.sql.Timestamp;
@@ -43,10 +45,14 @@ import java.sql.Timestamp;
 @Component
 public class ConfiRemoveRequestHandler extends RequestHandler<ConfigRemoveRequest, ConfigRemoveResponse> {
     
-    @Autowired
-    private PersistService persistService;
+    private final PersistService persistService;
+    
+    public ConfiRemoveRequestHandler(PersistService persistService) {
+        this.persistService = persistService;
+    }
     
     @Override
+    @Secured(action = ActionTypes.WRITE, parser = ConfigResourceParser.class)
     public ConfigRemoveResponse handle(ConfigRemoveRequest request, RequestMeta meta) throws NacosException {
         ConfigRemoveRequest myrequest = (ConfigRemoveRequest) request;
         // check tenant
@@ -74,7 +80,7 @@ public class ConfiRemoveRequestHandler extends RequestHandler<ConfigRemoveReques
             return ConfigRemoveResponse.buildSuccessResponse();
             
         } catch (Exception e) {
-            Loggers.RPC_DIGEST.error("remove config error,error msg is {}", e.getMessage(), e);
+            Loggers.REMOTE_DIGEST.error("remove config error,error msg is {}", e.getMessage(), e);
             return ConfigRemoveResponse.buildFailResponse(e.getMessage());
         }
     }

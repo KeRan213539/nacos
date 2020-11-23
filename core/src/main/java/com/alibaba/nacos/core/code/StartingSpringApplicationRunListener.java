@@ -16,20 +16,23 @@
 
 package com.alibaba.nacos.core.code;
 
+import com.alibaba.nacos.api.exception.NacosException;
+import com.alibaba.nacos.api.exception.runtime.NacosRuntimeException;
 import com.alibaba.nacos.common.executor.ExecutorFactory;
 import com.alibaba.nacos.common.executor.NameThreadFactory;
 import com.alibaba.nacos.common.executor.ThreadPoolManager;
-import com.alibaba.nacos.common.http.HttpClientManager;
 import com.alibaba.nacos.common.notify.NotifyCenter;
-import com.alibaba.nacos.core.file.WatchFileCenter;
-import com.alibaba.nacos.core.utils.ApplicationUtils;
-import com.alibaba.nacos.core.utils.DiskUtils;
-import com.alibaba.nacos.core.utils.InetUtils;
+import com.alibaba.nacos.sys.env.EnvUtil;
+import com.alibaba.nacos.sys.file.WatchFileCenter;
+import com.alibaba.nacos.sys.utils.ApplicationUtils;
+import com.alibaba.nacos.sys.utils.DiskUtils;
+import com.alibaba.nacos.sys.utils.InetUtils;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.boot.SpringApplication;
 import org.springframework.boot.SpringApplicationRunListener;
 import org.springframework.boot.context.event.EventPublishingRunListener;
+import org.springframework.boot.env.OriginTrackedMapPropertySource;
 import org.springframework.context.ConfigurableApplicationContext;
 import org.springframework.core.Ordered;
 import org.springframework.core.env.ConfigurableEnvironment;
@@ -73,6 +76,13 @@ public class StartingSpringApplicationRunListener implements SpringApplicationRu
     @Override
     public void environmentPrepared(ConfigurableEnvironment environment) {
         ApplicationUtils.injectEnvironment(environment);
+        EnvUtil.setEnvironment(environment);
+        try {
+            environment.getPropertySources().addLast(new OriginTrackedMapPropertySource("first_pre",
+                    EnvUtil.loadProperties(EnvUtil.getApplicationConfFileResource())));
+        } catch (IOException e) {
+            throw new NacosRuntimeException(NacosException.SERVER_ERROR, e);
+        }
         if (ApplicationUtils.getStandaloneMode()) {
             System.setProperty(MODE_PROPERTY_KEY_STAND_MODE, "stand alone");
         } else {
@@ -86,7 +96,7 @@ public class StartingSpringApplicationRunListener implements SpringApplicationRu
             System.setProperty(MODE_PROPERTY_KEY_FUNCTION_MODE, ApplicationUtils.FUNCTION_MODE_NAMING);
         }
         
-        System.setProperty(LOCAL_IP_PROPERTY_KEY, InetUtils.getSelfIp());
+        System.setProperty(LOCAL_IP_PROPERTY_KEY, InetUtils.getSelfIP());
     }
     
     @Override
@@ -125,14 +135,15 @@ public class StartingSpringApplicationRunListener implements SpringApplicationRu
                 useExternalStorage = true;
             }
         }
-        
+    
+        ApplicationUtils.setStarted(true);
         LOGGER.info("Nacos started successfully in {} mode. use {} storage",
                 System.getProperty(MODE_PROPERTY_KEY_STAND_MODE), useExternalStorage ? "external" : "embedded");
     }
     
     @Override
     public void running(ConfigurableApplicationContext context) {
-    
+        EnvUtil.getEnvironment().getPropertySources().remove("first_pre");
     }
     
     @Override
@@ -142,8 +153,6 @@ public class StartingSpringApplicationRunListener implements SpringApplicationRu
         logFilePath();
         
         LOGGER.error("Startup errors : {}", exception);
-        
-        HttpClientManager.shutdown();
         ThreadPoolManager.shutdown();
         WatchFileCenter.shutdown();
         NotifyCenter.shutdown();

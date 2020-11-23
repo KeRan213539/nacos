@@ -23,11 +23,10 @@ import com.alibaba.nacos.api.remote.request.ServerLoaderInfoRequest;
 import com.alibaba.nacos.api.remote.response.ServerLoaderInfoResponse;
 import com.alibaba.nacos.core.remote.ConnectionManager;
 import com.alibaba.nacos.core.remote.RequestHandler;
+import com.alibaba.nacos.sys.utils.ApplicationUtils;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
 
-import java.lang.management.ManagementFactory;
-import java.lang.management.OperatingSystemMXBean;
 import java.util.HashMap;
 import java.util.Map;
 
@@ -47,23 +46,15 @@ public class ServerLoaderInfoRequestHandler extends RequestHandler<ServerLoaderI
     public ServerLoaderInfoResponse handle(ServerLoaderInfoRequest request, RequestMeta meta) throws NacosException {
         ServerLoaderInfoResponse serverLoaderInfoResponse = new ServerLoaderInfoResponse();
         serverLoaderInfoResponse.putMetricsValue("conCount", String.valueOf(connectionManager.currentClientsCount()));
-        Map<String, String> filter = new HashMap<String, String>();
+        Map<String, String> filter = new HashMap<String, String>(2);
         filter.put(RemoteConstants.LABEL_SOURCE, RemoteConstants.LABEL_SOURCE_SDK);
         serverLoaderInfoResponse
                 .putMetricsValue("sdkConCount", String.valueOf(connectionManager.currentClientsCount(filter)));
         serverLoaderInfoResponse.putMetricsValue("countLimit", String.valueOf(connectionManager.countLimited()));
-        serverLoaderInfoResponse.putMetricsValue("cpuLoad", String.valueOf(getSystemCpuLoad()));
+        serverLoaderInfoResponse.putMetricsValue("load", String.valueOf(ApplicationUtils.getLoad()));
+        serverLoaderInfoResponse.putMetricsValue("cpu", String.valueOf(ApplicationUtils.getCPU()));
         
         return serverLoaderInfoResponse;
     }
     
-    public static double getSystemCpuLoad() {
-        
-        OperatingSystemMXBean osmxb = (OperatingSystemMXBean) ManagementFactory
-                
-                .getOperatingSystemMXBean();
-        
-        return osmxb.getSystemLoadAverage();
-        
-    }
 }

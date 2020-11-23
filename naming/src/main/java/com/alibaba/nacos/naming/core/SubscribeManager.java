@@ -17,22 +17,22 @@
 package com.alibaba.nacos.naming.core;
 
 import com.alibaba.nacos.api.naming.CommonParams;
+import com.alibaba.nacos.common.model.RestResult;
 import com.alibaba.nacos.common.utils.JacksonUtils;
 import com.alibaba.nacos.core.cluster.Member;
 import com.alibaba.nacos.core.cluster.ServerMemberManager;
-import com.alibaba.nacos.core.utils.ApplicationUtils;
+import com.alibaba.nacos.sys.utils.ApplicationUtils;
 import com.alibaba.nacos.naming.misc.HttpClient;
 import com.alibaba.nacos.naming.misc.NetUtils;
 import com.alibaba.nacos.naming.misc.UtilsAndCommons;
 import com.alibaba.nacos.naming.pojo.Subscriber;
 import com.alibaba.nacos.naming.pojo.Subscribers;
 import com.alibaba.nacos.naming.push.PushService;
-import com.alibaba.nacos.naming.push.RemotePushService;
+import com.alibaba.nacos.naming.push.ClientPushService;
 import org.apache.commons.collections.CollectionUtils;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 
-import java.net.HttpURLConnection;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashMap;
@@ -59,7 +59,7 @@ public class SubscribeManager {
     private PushService pushService;
     
     @Autowired
-    private RemotePushService remotePushService;
+    private ClientPushService clientPushService;
     
     @Autowired
     private ServerMemberManager memberManager;
@@ -67,7 +67,7 @@ public class SubscribeManager {
     private List<Subscriber> getSubscribersFuzzy(String serviceName, String namespaceId) {
         List<Subscriber> result = new LinkedList<>();
         result.addAll(pushService.getClientsFuzzy(serviceName, namespaceId));
-        result.addAll(remotePushService.getSubscribes(namespaceId, serviceName));
+        result.addAll(clientPushService.getSubscribes(namespaceId, serviceName));
         return result;
     }
     
@@ -105,13 +105,13 @@ public class SubscribeManager {
                     continue;
                 }
                 
-                HttpClient.HttpResult result = HttpClient.httpGet(
+                RestResult<String> result = HttpClient.httpGet(
                         "http://" + server.getAddress() + ApplicationUtils.getContextPath()
                                 + UtilsAndCommons.NACOS_NAMING_CONTEXT + SUBSCRIBER_ON_SYNC_URL, new ArrayList<>(),
                         paramValues);
                 
-                if (HttpURLConnection.HTTP_OK == result.code) {
-                    Subscribers subscribers = JacksonUtils.toObj(result.content, Subscribers.class);
+                if (result.ok()) {
+                    Subscribers subscribers = JacksonUtils.toObj(result.getData(), Subscribers.class);
                     subscriberList.addAll(subscribers.getSubscribers());
                 }
             }

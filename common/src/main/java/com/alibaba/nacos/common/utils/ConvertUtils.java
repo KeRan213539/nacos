@@ -51,7 +51,25 @@ public final class ConvertUtils {
         if (StringUtils.isBlank(val)) {
             return defaultValue;
         }
-        return Integer.parseInt(val);
+        try {
+            return Integer.parseInt(val);
+        } catch (NumberFormatException exception) {
+            return defaultValue;
+        }
+    }
+    
+    /**
+     * Convert Object value to long value if parameter value is legal.
+     * And it automatically defaults to 0 if parameter value is null or other object.
+     *
+     * @param val object value
+     * @return Converted long value and its default value is 0.
+     */
+    public static long toLong(Object val) {
+        if (val instanceof Long) {
+            return (Long) val;
+        }
+        return toLong(val.toString());
     }
     
     /**
@@ -77,7 +95,11 @@ public final class ConvertUtils {
         if (StringUtils.isBlank(val)) {
             return defaultValue;
         }
-        return Long.parseLong(val);
+        try {
+            return Long.parseLong(val);
+        } catch (NumberFormatException exception) {
+            return defaultValue;
+        }
     }
     
     /**
@@ -92,7 +114,11 @@ public final class ConvertUtils {
         if (StringUtils.isBlank(val)) {
             return defaultValue;
         }
-        return Boolean.parseBoolean(val);
+        try {
+            return Boolean.parseBoolean(val);
+        } catch (NumberFormatException exception) {
+            return defaultValue;
+        }
     }
     
     //   The following utility functions are extracted from <link>org.apache.commons.lang3</link>
@@ -126,7 +152,7 @@ public final class ConvertUtils {
      * @return the boolean value of the string, {@code false} if no match or the String is null
      */
     public static boolean toBoolean(final String str) {
-        return toBooleanObject(str) == Boolean.TRUE;
+        return Boolean.TRUE.equals(toBooleanObject(str));
     }
     
     /**

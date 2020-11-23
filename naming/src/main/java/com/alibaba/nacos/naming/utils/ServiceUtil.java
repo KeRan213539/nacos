@@ -17,6 +17,7 @@
 package com.alibaba.nacos.naming.utils;
 
 import com.alibaba.nacos.api.common.Constants;
+import com.alibaba.nacos.api.naming.pojo.ServiceInfo;
 import com.alibaba.nacos.api.selector.SelectorType;
 import com.alibaba.nacos.common.utils.JacksonUtils;
 import com.alibaba.nacos.naming.core.Instance;
@@ -25,9 +26,14 @@ import com.fasterxml.jackson.databind.JsonNode;
 import org.apache.commons.lang3.StringUtils;
 
 import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.Collection;
 import java.util.HashMap;
+import java.util.HashSet;
+import java.util.LinkedList;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
 /**
  * Service util.
@@ -131,7 +137,19 @@ public class ServiceUtil {
      * @return service name list by paged
      */
     public static List<String> pageServiceName(int pageNo, int pageSize, Map<String, Service> serviceMap) {
-        List<String> result = new ArrayList<>(serviceMap.keySet());
+        return pageServiceName(pageNo, pageSize, serviceMap.keySet());
+    }
+    
+    /**
+     * Page service name.
+     *
+     * @param pageNo         page number
+     * @param pageSize       size per page
+     * @param serviceNameSet service name set
+     * @return service name list by paged
+     */
+    public static List<String> pageServiceName(int pageNo, int pageSize, Collection<String> serviceNameSet) {
+        List<String> result = new ArrayList<>(serviceNameSet);
         int start = (pageNo - 1) * pageSize;
         if (start < 0) {
             start = 0;
@@ -149,5 +167,104 @@ public class ServiceUtil {
             result.set(i, serviceName);
         }
         return result.subList(start, end);
+    }
+    
+    /**
+     * Select healthy instance of service info.
+     *
+     * @param serviceInfo original service info
+     * @return new service info
+     */
+    public static ServiceInfo selectHealthyInstances(ServiceInfo serviceInfo) {
+        return selectInstances(serviceInfo, true, false);
+    }
+    
+    /**
+     * Select healthy instance of service info.
+     *
+     * @param serviceInfo original service info
+     * @return new service info
+     */
+    public static ServiceInfo selectEnabledInstances(ServiceInfo serviceInfo) {
+        return selectInstances(serviceInfo, false, true);
+    }
+    
+    /**
+     * Select instance of service info.
+     *
+     * @param serviceInfo original service info
+     * @param cluster     cluster of instances
+     * @return new service info
+     */
+    public static ServiceInfo selectInstances(ServiceInfo serviceInfo, String cluster) {
+        return selectInstances(serviceInfo, cluster, false, false);
+    }
+    
+    /**
+     * Select instance of service info.
+     *
+     * @param serviceInfo original service info
+     * @param healthyOnly whether only select instance which healthy
+     * @param enableOnly  whether only select instance which enabled
+     * @return new service info
+     */
+    public static ServiceInfo selectInstances(ServiceInfo serviceInfo, boolean healthyOnly, boolean enableOnly) {
+        return selectInstances(serviceInfo, StringUtils.EMPTY, healthyOnly, enableOnly);
+    }
+    
+    /**
+     * Select instance of service info.
+     *
+     * @param serviceInfo original service info
+     * @param cluster     cluster of instances
+     * @param healthyOnly whether only select instance which healthy
+     * @return new service info
+     */
+    public static ServiceInfo selectInstances(ServiceInfo serviceInfo, String cluster, boolean healthyOnly) {
+        return selectInstances(serviceInfo, cluster, healthyOnly, false);
+    }
+    
+    /**
+     * Select instance of service info.
+     *
+     * @param serviceInfo original service info
+     * @param cluster     cluster of instances
+     * @param healthyOnly whether only select instance which healthy
+     * @param enableOnly  whether only select instance which enabled
+     * @return new service info
+     */
+    public static ServiceInfo selectInstances(ServiceInfo serviceInfo, String cluster, boolean healthyOnly,
+            boolean enableOnly) {
+        ServiceInfo result = new ServiceInfo();
+        result.setName(serviceInfo.getName());
+        result.setGroupName(serviceInfo.getGroupName());
+        result.setCacheMillis(serviceInfo.getCacheMillis());
+        result.setLastRefTime(System.currentTimeMillis());
+        result.setClusters(cluster);
+        Set<String> clusterSets = com.alibaba.nacos.common.utils.StringUtils.isNotBlank(cluster) ? new HashSet<>(
+                Arrays.asList(cluster.split(","))) : new HashSet<>();
+        List<com.alibaba.nacos.api.naming.pojo.Instance> filteredInstance = new LinkedList<>();
+        for (com.alibaba.nacos.api.naming.pojo.Instance each : serviceInfo.getHosts()) {
+            if (checkCluster(clusterSets, each) && checkHealthy(healthyOnly, each) && checkEnabled(enableOnly, each)) {
+                filteredInstance.add(each);
+            }
+        }
+        result.setHosts(filteredInstance);
+        return result;
+    }
+    
+    private static boolean checkCluster(Set<String> clusterSets, com.alibaba.nacos.api.naming.pojo.Instance instance) {
+        if (clusterSets.isEmpty()) {
+            return true;
+        }
+        return clusterSets.contains(instance.getClusterName());
+    }
+    
+    private static boolean checkHealthy(boolean healthyOnly, com.alibaba.nacos.api.naming.pojo.Instance instance) {
+        return !healthyOnly || instance.isHealthy();
+    }
+    
+    private static boolean checkEnabled(boolean enableOnly, com.alibaba.nacos.api.naming.pojo.Instance instance) {
+        return !enableOnly || instance.isEnabled();
     }
 }

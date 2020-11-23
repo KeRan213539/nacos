@@ -22,9 +22,10 @@ import com.alibaba.nacos.api.remote.DefaultRequestFuture;
 import com.alibaba.nacos.api.remote.RequestCallBack;
 import com.alibaba.nacos.api.remote.RequestFuture;
 import com.alibaba.nacos.api.remote.request.Request;
+import com.alibaba.nacos.api.remote.request.RequestMeta;
 import com.alibaba.nacos.api.remote.response.Response;
 import com.alibaba.nacos.api.utils.NetUtils;
-import com.alibaba.nacos.common.remote.GrpcUtils;
+import com.alibaba.nacos.common.remote.client.grpc.GrpcUtils;
 import com.alibaba.nacos.common.remote.exception.ConnectionAlreadyClosedException;
 import com.alibaba.nacos.common.utils.VersionUtils;
 import com.alibaba.nacos.core.remote.Connection;
@@ -35,8 +36,11 @@ import io.grpc.StatusRuntimeException;
 import io.grpc.netty.shaded.io.netty.channel.Channel;
 import io.grpc.stub.StreamObserver;
 
+import java.util.Map;
+
 /**
  * grpc connection.
+ *
  * @author liuzunfei
  * @version $Id: GrpcConnection.java, v 0.1 2020年07月13日 7:26 PM liuzunfei Exp $
  */
@@ -52,22 +56,9 @@ public class GrpcConnection extends Connection {
         this.channel = channel;
     }
     
-    @Override
-    public Response sendRequest(Request request, long timeoutMills) throws NacosException {
-        DefaultRequestFuture pushFuture = (DefaultRequestFuture) sendRequestWithFuture(request);
+    private void sendRequestNoAck(Request request, RequestMeta meta) throws NacosException {
         try {
-            return pushFuture.get(timeoutMills);
-        } catch (Exception e) {
-            throw new NacosException(NacosException.SERVER_ERROR, e);
-        } finally {
-            RpcAckCallbackSynchronizer.clearFuture(getConnectionId(), pushFuture.getRequestId());
-        }
-    }
-    
-    @Override
-    public void sendRequestNoAck(Request request) throws NacosException {
-        try {
-            streamObserver.onNext(GrpcUtils.convert(request, buildMeta(request.getClass().getName())));
+            streamObserver.onNext(GrpcUtils.convert(request, wrapMeta(meta)));
         } catch (Exception e) {
             if (e instanceof StatusRuntimeException) {
                 throw new ConnectionAlreadyClosedException(e);
@@ -76,39 +67,84 @@ public class GrpcConnection extends Connection {
         }
     }
     
+    private RequestMeta wrapMeta(RequestMeta meta) {
+        if (meta == null) {
+            meta = new RequestMeta();
+        }
+        meta.setClientVersion(VersionUtils.getFullClientVersion());
+        meta.setConnectionId(getMetaInfo().getConnectionId());
+        meta.setClientPort(getMetaInfo().getLocalPort());
+        meta.setClientIp(NetUtils.localIP());
+        return meta;
+    }
+    
     Metadata buildMeta(String type) {
         Metadata meta = Metadata.newBuilder().setClientIp(NetUtils.localIP()).setType(type)
                 .setClientVersion(VersionUtils.getFullClientVersion()).build();
         return meta;
     }
     
-    @Override
-    public RequestFuture sendRequestWithFuture(Request request) throws NacosException {
-        return sendRequestInner(request, null);
-    }
-    
-    @Override
-    public void sendRequestWithCallBack(Request request, RequestCallBack callBack) throws NacosException {
-        sendRequestInner(request, callBack);
-    }
-    
-    private DefaultRequestFuture sendRequestInner(Request request, RequestCallBack callBack) throws NacosException {
-        Loggers.RPC_DIGEST.info("Grpc sendRequest :" + request);
+    private DefaultRequestFuture sendRequestInner(Request request, RequestMeta meta, RequestCallBack callBack)
+            throws NacosException {
         String requestId = String.valueOf(PushAckIdGenerator.getNextId());
         request.setRequestId(requestId);
-        sendRequestNoAck(request);
-        DefaultRequestFuture defaultPushFuture = new DefaultRequestFuture(requestId, callBack);
-        RpcAckCallbackSynchronizer.syncCallback(getConnectionId(), requestId, defaultPushFuture);
+        sendRequestNoAck(request, meta);
+        DefaultRequestFuture defaultPushFuture = new DefaultRequestFuture(getMetaInfo().getConnectionId(), requestId,
+                callBack,
+                new DefaultRequestFuture.TimeoutInnerTrigger() {
+                    @Override
+                    public void triggerOnTimeout() {
+                        RpcAckCallbackSynchronizer.clearFuture(getMetaInfo().getConnectionId(), requestId);
+                    }
+                });
+        RpcAckCallbackSynchronizer.syncCallback(getMetaInfo().getConnectionId(), requestId, defaultPushFuture);
         return defaultPushFuture;
     }
     
     @Override
-    public void closeGrapcefully() {
+    public Response request(Request request, RequestMeta requestMeta) throws NacosException {
+        return request(request, requestMeta, 3000L);
+    }
+    
+    @Override
+    public Response request(Request request, RequestMeta requestMeta, long timeoutMills) throws NacosException {
+        DefaultRequestFuture pushFuture = (DefaultRequestFuture) sendRequestInner(request, requestMeta, null);
         try {
-            streamObserver.onCompleted();
+            return pushFuture.get(timeoutMills);
         } catch (Exception e) {
-            Loggers.RPC_DIGEST.warn("Grpc connection close exception .", e);
+            throw new NacosException(NacosException.SERVER_ERROR, e);
+        } finally {
+            RpcAckCallbackSynchronizer.clearFuture(getMetaInfo().getConnectionId(), pushFuture.getRequestId());
         }
     }
     
+    @Override
+    public RequestFuture requestFuture(Request request, RequestMeta requestMeta) throws NacosException {
+        return sendRequestInner(request, requestMeta, null);
+    }
+    
+    @Override
+    public void asyncRequest(Request request, RequestMeta requestMeta, RequestCallBack requestCallBack)
+            throws NacosException {
+        sendRequestInner(request, requestMeta, requestCallBack);
+    }
+    
+    @Override
+    public Map<String, String> getLabels() {
+        return null;
+    }
+    
+    @Override
+    public void close() {
+        try {
+            streamObserver.onCompleted();
+        } catch (Exception e) {
+            Loggers.REMOTE.debug(String.format("[%s] connection close exception  : %s", "grpc", e.getMessage()));
+        }
+    }
+    
+    @Override
+    public boolean isConnected() {
+        return channel.isActive();
+    }
 }

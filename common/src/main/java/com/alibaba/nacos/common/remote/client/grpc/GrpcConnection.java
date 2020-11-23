@@ -19,12 +19,13 @@ package com.alibaba.nacos.common.remote.client.grpc;
 import com.alibaba.nacos.api.exception.NacosException;
 import com.alibaba.nacos.api.grpc.auto.Payload;
 import com.alibaba.nacos.api.grpc.auto.RequestGrpc;
-import com.alibaba.nacos.api.grpc.auto.RequestStreamGrpc;
+import com.alibaba.nacos.api.remote.RequestCallBack;
+import com.alibaba.nacos.api.remote.RequestFuture;
+import com.alibaba.nacos.api.remote.RpcScheduledExecutor;
 import com.alibaba.nacos.api.remote.request.Request;
 import com.alibaba.nacos.api.remote.request.RequestMeta;
 import com.alibaba.nacos.api.remote.response.Response;
 import com.alibaba.nacos.api.remote.response.ResponseCode;
-import com.alibaba.nacos.common.remote.GrpcUtils;
 import com.alibaba.nacos.common.remote.client.Connection;
 import com.alibaba.nacos.common.remote.client.RpcClient;
 import com.google.common.util.concurrent.FutureCallback;
@@ -34,8 +35,10 @@ import io.grpc.ManagedChannel;
 import io.grpc.stub.StreamObserver;
 import org.checkerframework.checker.nullness.compatqual.NullableDecl;
 
-import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
+import java.util.concurrent.CancellationException;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 
 /**
  * grpc connection.
@@ -46,20 +49,9 @@ import java.util.concurrent.Executors;
 public class GrpcConnection extends Connection {
     
     /**
-     * executor to execute future request.
-     */
-    static ExecutorService aynsRequestExecutor = Executors
-            .newScheduledThreadPool(Runtime.getRuntime().availableProcessors());
-    
-    /**
      * grpc channel.
      */
     protected ManagedChannel channel;
-    
-    /**
-     * stub to send stream request.
-     */
-    protected RequestStreamGrpc.RequestStreamStub grpcStreamServiceStub;
     
     /**
      * stub to send request.
@@ -68,26 +60,72 @@ public class GrpcConnection extends Connection {
     
     protected StreamObserver<Payload> payloadStreamObserver;
     
-    public GrpcConnection(RpcClient.ServerInfo serverInfo, StreamObserver<Payload> payloadStreamObserver) {
+    public GrpcConnection(RpcClient.ServerInfo serverInfo) {
         super(serverInfo);
-        this.payloadStreamObserver = payloadStreamObserver;
     }
     
     @Override
     public Response request(Request request, RequestMeta requestMeta) throws NacosException {
+        return request(request, requestMeta, 3000L);
+    }
+    
+    @Override
+    public Response request(Request request, RequestMeta requestMeta, long timeouts) throws NacosException {
         Payload grpcRequest = GrpcUtils.convert(request, requestMeta);
         
         ListenableFuture<Payload> requestFuture = grpcFutureServiceStub.request(grpcRequest);
         Payload grpcResponse = null;
         try {
-            grpcResponse = requestFuture.get();
+            grpcResponse = requestFuture.get(timeouts, TimeUnit.MILLISECONDS);
         } catch (Exception e) {
             e.printStackTrace();
             return null;
         }
-    
+        
         Response response = (Response) GrpcUtils.parse(grpcResponse).getBody();
         return response;
+    }
+    
+    @Override
+    public RequestFuture requestFuture(Request request, RequestMeta requestMeta) throws NacosException {
+        Payload grpcRequest = GrpcUtils.convert(request, requestMeta);
+        
+        final ListenableFuture<Payload> requestFuture = grpcFutureServiceStub.request(grpcRequest);
+        return new RequestFuture() {
+            
+            @Override
+            public boolean isDone() {
+                return requestFuture.isDone();
+            }
+            
+            @Override
+            public Response get() throws InterruptedException, ExecutionException {
+                Payload grpcResponse = null;
+                try {
+                    grpcResponse = requestFuture.get();
+                } catch (Exception e) {
+                    e.printStackTrace();
+                    return null;
+                }
+                
+                Response response = (Response) GrpcUtils.parse(grpcResponse).getBody();
+                return response;
+            }
+            
+            @Override
+            public Response get(long timeout) throws TimeoutException, InterruptedException, ExecutionException {
+                Payload grpcResponse = null;
+                try {
+                    grpcResponse = requestFuture.get(timeout, TimeUnit.MILLISECONDS);
+                } catch (TimeoutException e) {
+                    throw e;
+                } catch (ExecutionException e) {
+                    throw e;
+                }
+                Response response = (Response) GrpcUtils.parse(grpcResponse).getBody();
+                return response;
+            }
+        };
     }
     
     public void sendResponse(Response response) {
@@ -101,18 +139,20 @@ public class GrpcConnection extends Connection {
     }
     
     @Override
-    public void asyncRequest(Request request, RequestMeta requestMeta, final FutureCallback<Response> callback)
+    public void asyncRequest(Request request, RequestMeta requestMeta, final RequestCallBack requestCallBack)
             throws NacosException {
         Payload grpcRequest = GrpcUtils.convert(request, requestMeta);
         ListenableFuture<Payload> requestFuture = grpcFutureServiceStub.request(grpcRequest);
+    
+        //set callback .
         Futures.addCallback(requestFuture, new FutureCallback<Payload>() {
             @Override
             public void onSuccess(@NullableDecl Payload grpcResponse) {
                 Response response = (Response) GrpcUtils.parse(grpcResponse).getBody();
                 if (response != null && response.isSuccess()) {
-                    callback.onSuccess(response);
+                    requestCallBack.onResponse(response);
                 } else {
-                    callback.onFailure(new NacosException(
+                    requestCallBack.onException(new NacosException(
                             (response == null) ? ResponseCode.FAIL.getCode() : response.getErrorCode(),
                             (response == null) ? "null" : response.getMessage()));
                 }
@@ -120,9 +160,19 @@ public class GrpcConnection extends Connection {
             
             @Override
             public void onFailure(Throwable throwable) {
-                callback.onFailure(throwable);
+                if (throwable instanceof CancellationException) {
+                    requestCallBack.onException(
+                            new TimeoutException("Timeout after " + requestCallBack.getTimeout() + " millseconds."));
+                } else {
+                    requestCallBack.onException(throwable);
+                }
             }
-        }, aynsRequestExecutor);
+        }, RpcScheduledExecutor.AYNS_REQUEST_EXECUTOR);
+        // set timeout future.
+        ListenableFuture<Payload> payloadListenableFuture = Futures
+                .withTimeout(requestFuture, requestCallBack.getTimeout(), TimeUnit.MILLISECONDS,
+                        RpcScheduledExecutor.TIMEOUT_SHEDULER);
+        
     }
     
     @Override
@@ -151,24 +201,6 @@ public class GrpcConnection extends Connection {
     }
     
     /**
-     * Getter method for property <tt>grpcStreamServiceStub</tt>.
-     *
-     * @return property value of grpcStreamServiceStub
-     */
-    public RequestStreamGrpc.RequestStreamStub getGrpcStreamServiceStub() {
-        return grpcStreamServiceStub;
-    }
-    
-    /**
-     * Setter method for property <tt>grpcStreamServiceStub</tt>.
-     *
-     * @param grpcStreamServiceStub value to be assigned to property grpcStreamServiceStub
-     */
-    public void setGrpcStreamServiceStub(RequestStreamGrpc.RequestStreamStub grpcStreamServiceStub) {
-        this.grpcStreamServiceStub = grpcStreamServiceStub;
-    }
-    
-    /**
      * Getter method for property <tt>grpcFutureServiceStub</tt>.
      *
      * @return property value of grpcFutureServiceStub
@@ -184,5 +216,23 @@ public class GrpcConnection extends Connection {
      */
     public void setGrpcFutureServiceStub(RequestGrpc.RequestFutureStub grpcFutureServiceStub) {
         this.grpcFutureServiceStub = grpcFutureServiceStub;
+    }
+    
+    /**
+     * Getter method for property <tt>payloadStreamObserver</tt>.
+     *
+     * @return property value of payloadStreamObserver
+     */
+    public StreamObserver<Payload> getPayloadStreamObserver() {
+        return payloadStreamObserver;
+    }
+    
+    /**
+     * Setter method for property <tt>payloadStreamObserver</tt>.
+     *
+     * @param payloadStreamObserver value to be assigned to property payloadStreamObserver
+     */
+    public void setPayloadStreamObserver(StreamObserver<Payload> payloadStreamObserver) {
+        this.payloadStreamObserver = payloadStreamObserver;
     }
 }

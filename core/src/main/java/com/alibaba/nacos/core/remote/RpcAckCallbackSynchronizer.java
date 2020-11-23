@@ -35,12 +35,13 @@ import java.util.function.Consumer;
  */
 public class RpcAckCallbackSynchronizer {
     
-    private static final Map<String, Map<String, DefaultRequestFuture>> CALLBACK_CONTEXT = new ConcurrentLinkedHashMap.Builder<String, Map<String, DefaultRequestFuture>>()
+    @SuppressWarnings("checkstyle:linelength")
+    public static final Map<String, Map<String, DefaultRequestFuture>> CALLBACK_CONTEXT = new ConcurrentLinkedHashMap.Builder<String, Map<String, DefaultRequestFuture>>()
             .maximumWeightedCapacity(1000000)
             .listener(new EvictionListener<String, Map<String, DefaultRequestFuture>>() {
                 @Override
                 public void onEviction(String s, Map<String, DefaultRequestFuture> pushCallBack) {
-    
+                    
                     pushCallBack.entrySet().forEach(new Consumer<Map.Entry<String, DefaultRequestFuture>>() {
                         @Override
                         public void accept(Map.Entry<String, DefaultRequestFuture> stringDefaultPushFutureEntry) {
@@ -54,16 +55,17 @@ public class RpcAckCallbackSynchronizer {
      * notify  ackid.
      */
     public static void ackNotify(String connectionId, Response response) {
-    
+        
         Map<String, DefaultRequestFuture> stringDefaultPushFutureMap = CALLBACK_CONTEXT.get(connectionId);
         if (stringDefaultPushFutureMap == null) {
             return;
         }
-    
-        DefaultRequestFuture currentCallback = stringDefaultPushFutureMap.get(response.getRequestId());
+        
+        DefaultRequestFuture currentCallback = stringDefaultPushFutureMap.remove(response.getRequestId());
         if (currentCallback == null) {
             return;
         }
+        
         if (response.isSuccess()) {
             currentCallback.setResponse(response);
         } else {
@@ -74,12 +76,28 @@ public class RpcAckCallbackSynchronizer {
     /**
      * notify  ackid.
      */
+    public static void exceptionNotify(String connectionId, String requestId, Exception e) {
+        
+        Map<String, DefaultRequestFuture> stringDefaultPushFutureMap = CALLBACK_CONTEXT.get(connectionId);
+        if (stringDefaultPushFutureMap == null) {
+            return;
+        }
+        
+        DefaultRequestFuture currentCallback = stringDefaultPushFutureMap.remove(requestId);
+        if (currentCallback == null) {
+            return;
+        }
+        currentCallback.setFailResult(e);
+    }
+    
+    /**
+     * notify  ackid.
+     */
     public static void syncCallback(String connectionId, String requestId, DefaultRequestFuture defaultPushFuture)
             throws NacosException {
-        if (!CALLBACK_CONTEXT.containsKey(connectionId)) {
-            CALLBACK_CONTEXT.putIfAbsent(connectionId, new HashMap<String, DefaultRequestFuture>());
-        }
-        Map<String, DefaultRequestFuture> stringDefaultPushFutureMap = CALLBACK_CONTEXT.get(connectionId);
+        
+        Map<String, DefaultRequestFuture> stringDefaultPushFutureMap = initContextIfNecessary(connectionId);
+        ;
         if (!stringDefaultPushFutureMap.containsKey(requestId)) {
             DefaultRequestFuture pushCallBackPrev = stringDefaultPushFutureMap
                     .putIfAbsent(requestId, defaultPushFuture);
@@ -98,6 +116,22 @@ public class RpcAckCallbackSynchronizer {
      */
     public static void clearContext(String connetionId) {
         CALLBACK_CONTEXT.remove(connetionId);
+    }
+    
+    /**
+     * clear context of connectionId.
+     *
+     * @param connetionId connetionId
+     */
+    public static Map<String, DefaultRequestFuture> initContextIfNecessary(String connetionId) {
+        if (!CALLBACK_CONTEXT.containsKey(connetionId)) {
+            Map<String, DefaultRequestFuture> context = new HashMap<String, DefaultRequestFuture>(128);
+            Map<String, DefaultRequestFuture> stringDefaultRequestFutureMap = CALLBACK_CONTEXT
+                    .putIfAbsent(connetionId, context);
+            return stringDefaultRequestFutureMap == null ? context : stringDefaultRequestFutureMap;
+        } else {
+            return CALLBACK_CONTEXT.get(connetionId);
+        }
     }
     
     /**

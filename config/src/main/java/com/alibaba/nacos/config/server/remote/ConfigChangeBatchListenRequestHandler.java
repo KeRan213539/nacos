@@ -20,11 +20,13 @@ import com.alibaba.nacos.api.config.remote.request.ConfigBatchListenRequest;
 import com.alibaba.nacos.api.config.remote.response.ConfigChangeBatchListenResponse;
 import com.alibaba.nacos.api.exception.NacosException;
 import com.alibaba.nacos.api.remote.request.RequestMeta;
+import com.alibaba.nacos.auth.annotation.Secured;
+import com.alibaba.nacos.auth.common.ActionTypes;
+import com.alibaba.nacos.config.server.auth.ConfigResourceParser;
 import com.alibaba.nacos.config.server.service.ConfigCacheService;
 import com.alibaba.nacos.config.server.utils.GroupKey2;
-import com.alibaba.nacos.config.server.utils.SingletonRepository;
 import com.alibaba.nacos.core.remote.RequestHandler;
-import org.springframework.beans.factory.annotation.Autowired;
+import com.alibaba.nacos.core.utils.StringPool;
 import org.springframework.stereotype.Component;
 
 import java.util.List;
@@ -39,14 +41,18 @@ import java.util.List;
 public class ConfigChangeBatchListenRequestHandler
         extends RequestHandler<ConfigBatchListenRequest, ConfigChangeBatchListenResponse> {
     
-    @Autowired
-    ConfigChangeListenContext configChangeListenContext;
+    final ConfigChangeListenContext configChangeListenContext;
+    
+    public ConfigChangeBatchListenRequestHandler(ConfigChangeListenContext configChangeListenContext) {
+        this.configChangeListenContext = configChangeListenContext;
+    }
     
     @Override
+    @Secured(action = ActionTypes.READ, parser = ConfigResourceParser.class)
     public ConfigChangeBatchListenResponse handle(ConfigBatchListenRequest request, RequestMeta requestMeta)
             throws NacosException {
         ConfigBatchListenRequest configChangeListenRequest = (ConfigBatchListenRequest) request;
-        String connectionId = requestMeta.getConnectionId();
+        String connectionId = StringPool.get(requestMeta.getConnectionId());
         List<String> changedGroups = null;
         String header = request.getHeader("Vipserver-Tag");
     
@@ -54,9 +60,10 @@ public class ConfigChangeBatchListenRequestHandler
         for (ConfigBatchListenRequest.ConfigListenContext listenContext : request.getConfigListenContexts()) {
             String groupKey = GroupKey2
                     .getKey(listenContext.getDataId(), listenContext.getGroup(), listenContext.getTenant());
-            groupKey = SingletonRepository.DataIdGroupIdCache.getSingleton(groupKey);
-        
-            String md5 = listenContext.getMd5();
+            groupKey = StringPool.get(groupKey);
+    
+            String md5 = StringPool.get(listenContext.getMd5());
+            
             if (configChangeListenRequest.isListen()) {
                 configChangeListenContext.addListen(groupKey, md5, connectionId);
                 boolean isUptoDate = ConfigCacheService.isUptodate(groupKey, md5, requestMeta.getClientIp(), header);

@@ -16,13 +16,14 @@
 
 package com.alibaba.nacos.core.distributed.distro.task.delay;
 
-import com.alibaba.nacos.common.task.AbstractDelayTask;
+import com.alibaba.nacos.common.task.NacosTask;
 import com.alibaba.nacos.common.task.NacosTaskProcessor;
 import com.alibaba.nacos.consistency.DataOperation;
 import com.alibaba.nacos.core.distributed.distro.component.DistroComponentHolder;
 import com.alibaba.nacos.core.distributed.distro.entity.DistroKey;
 import com.alibaba.nacos.core.distributed.distro.task.DistroTaskEngineHolder;
 import com.alibaba.nacos.core.distributed.distro.task.execute.DistroSyncChangeTask;
+import com.alibaba.nacos.core.distributed.distro.task.execute.DistroSyncDeleteTask;
 
 /**
  * Distro delay task processor.
@@ -42,7 +43,7 @@ public class DistroDelayTaskProcessor implements NacosTaskProcessor {
     }
     
     @Override
-    public boolean process(AbstractDelayTask task) {
+    public boolean process(NacosTask task) {
         if (!(task instanceof DistroDelayTask)) {
             return true;
         }
@@ -50,7 +51,11 @@ public class DistroDelayTaskProcessor implements NacosTaskProcessor {
         DistroKey distroKey = distroDelayTask.getDistroKey();
         if (DataOperation.CHANGE.equals(distroDelayTask.getAction())) {
             DistroSyncChangeTask syncChangeTask = new DistroSyncChangeTask(distroKey, distroComponentHolder);
-            distroTaskEngineHolder.getExecuteWorkersManager().dispatch(distroKey, syncChangeTask);
+            distroTaskEngineHolder.getExecuteWorkersManager().addTask(distroKey, syncChangeTask);
+            return true;
+        } else if (DataOperation.DELETE.equals(distroDelayTask.getAction())) {
+            DistroSyncDeleteTask syncDeleteTask = new DistroSyncDeleteTask(distroKey, distroComponentHolder);
+            distroTaskEngineHolder.getExecuteWorkersManager().addTask(distroKey, syncDeleteTask);
             return true;
         }
         return false;

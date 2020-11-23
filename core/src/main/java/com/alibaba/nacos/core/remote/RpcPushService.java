@@ -17,7 +17,7 @@
 package com.alibaba.nacos.core.remote;
 
 import com.alibaba.nacos.api.exception.NacosException;
-import com.alibaba.nacos.api.remote.RequestCallBack;
+import com.alibaba.nacos.api.remote.AbstractRequestCallBack;
 import com.alibaba.nacos.api.remote.request.ServerPushRequest;
 import com.alibaba.nacos.api.remote.response.PushCallBack;
 import com.alibaba.nacos.api.remote.response.Response;
@@ -25,6 +25,8 @@ import com.alibaba.nacos.common.remote.exception.ConnectionAlreadyClosedExceptio
 import com.alibaba.nacos.core.utils.Loggers;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
+
+import java.util.concurrent.Executor;
 
 /**
  * push response  to clients.
@@ -45,35 +47,38 @@ public class RpcPushService {
      * @param request         request.
      * @param requestCallBack requestCallBack.
      */
-    public void pushWithCallback(String connectionId, ServerPushRequest request, PushCallBack requestCallBack) {
+    public void pushWithCallback(String connectionId, ServerPushRequest request, PushCallBack requestCallBack,
+            Executor executor) {
         Connection connection = connectionManager.getConnection(connectionId);
         if (connection != null) {
             try {
-                connection.sendRequestWithCallBack(request, new RequestCallBack() {
-                    @Override
-                    public long getTimeout() {
-                        return requestCallBack.getTimeout();
-                    }
-        
-                    @Override
-                    public void onResponse(Response response) {
-                        if (response.isSuccess()) {
-                            requestCallBack.onSuccess();
-                        } else {
-                            requestCallBack.onFail(new NacosException(response.getErrorCode(), response.getMessage()));
-                        }
-                    }
-        
-                    @Override
-                    public void onException(Exception e) {
-                        requestCallBack.onFail(e);
-                    }
-                });
+                connection.asyncRequest(request, null, new AbstractRequestCallBack(requestCallBack.getTimeout()) {
+                
+                            @Override
+                            public Executor getExcutor() {
+                                return executor;
+                            }
+                
+                            @Override
+                            public void onResponse(Response response) {
+                                if (response.isSuccess()) {
+                                    requestCallBack.onSuccess();
+                                } else {
+                                    requestCallBack
+                                            .onFail(new NacosException(response.getErrorCode(), response.getMessage()));
+                                }
+                            }
+                
+                            @Override
+                            public void onException(Throwable e) {
+                                requestCallBack.onFail(e);
+                            }
+                        });
             } catch (ConnectionAlreadyClosedException e) {
                 connectionManager.unregister(connectionId);
                 requestCallBack.onSuccess();
             } catch (Exception e) {
-                Loggers.RPC_DIGEST
+                Loggers.REMOTE_DIGEST
                         .error("error to send push response to connectionId ={},push response={}", connectionId,
                                 request, e);
             }
@@ -92,11 +97,11 @@ public class RpcPushService {
         Connection connection = connectionManager.getConnection(connectionId);
         if (connection != null) {
             try {
-                connection.sendRequestNoAck(request);
+                connection.request(request, null);
             } catch (ConnectionAlreadyClosedException e) {
                 connectionManager.unregister(connectionId);
             } catch (Exception e) {
-                Loggers.RPC_DIGEST
+                Loggers.REMOTE_DIGEST
                         .error("error to send push response to connectionId ={},push response={}", connectionId,
                                 request, e);
             }

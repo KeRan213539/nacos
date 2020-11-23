@@ -26,12 +26,12 @@ import com.alibaba.nacos.api.remote.response.Response;
 import com.alibaba.nacos.api.remote.response.ResponseCode;
 import com.alibaba.nacos.api.remote.response.ServerCheckResponse;
 import com.alibaba.nacos.api.remote.response.UnKnowResponse;
-import com.alibaba.nacos.common.remote.GrpcUtils;
+import com.alibaba.nacos.common.remote.client.grpc.GrpcUtils;
 import com.alibaba.nacos.core.remote.ConnectionManager;
 import com.alibaba.nacos.core.remote.RequestHandler;
 import com.alibaba.nacos.core.remote.RequestHandlerRegistry;
-import com.alibaba.nacos.core.remote.RpcAckCallbackSynchronizer;
 import com.alibaba.nacos.core.utils.Loggers;
+import com.alibaba.nacos.sys.utils.ApplicationUtils;
 import io.grpc.stub.StreamObserver;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
@@ -55,10 +55,16 @@ public class GrpcRequestAcceptor extends RequestGrpc.RequestImplBase {
     public void request(Payload grpcRequest, StreamObserver<Payload> responseObserver) {
     
         String type = grpcRequest.getMetadata().getType();
+    
+        if (!ApplicationUtils.isStarted()) {
+            responseObserver.onNext(GrpcUtils.convert(new PlainBodyResponse("server is starting.")));
+            responseObserver.onCompleted();
+            return;
+        }
         
         if (ServerCheckRequest.class.getName().equals(type)) {
     
-            Loggers.RPC_DIGEST.debug(String.format("[%s]  server check request receive ,clientIp : %s ", "grpc",
+            Loggers.REMOTE_DIGEST.debug(String.format("[%s]  server check request receive ,clientIp : %s ", "grpc",
                     grpcRequest.getMetadata().getClientIp()));
             responseObserver.onNext(GrpcUtils.convert(new ServerCheckResponse()));
             responseObserver.onCompleted();
@@ -68,54 +74,42 @@ public class GrpcRequestAcceptor extends RequestGrpc.RequestImplBase {
         GrpcUtils.PlainRequest parseObj = GrpcUtils.parse(grpcRequest);
         
         if (parseObj != null) {
-            if (parseObj.getBody() instanceof Response) {
-                Response response = (Response) parseObj.getBody();
-                Loggers.RPC_DIGEST.debug(String.format("[%s]  response receive :  %s ", "grpc", response.toString()));
-    
-                String connectionId = grpcRequest.getMetadata().getConnectionId();
-                RpcAckCallbackSynchronizer.ackNotify(connectionId, response);
-                responseObserver.onNext(GrpcUtils.convert(new PlainBodyResponse()));
-                responseObserver.onCompleted();
-                return;
-            } else {
-                Request request = (Request) parseObj.getBody();
-                Loggers.RPC_DIGEST.debug(String.format("[%s] request receive :%s ", "grpc", request.toString()));
-                RequestHandler requestHandler = requestHandlerRegistry.getByRequestType(type);
-                if (requestHandler != null) {
-                    try {
-                        boolean requestValid = connectionManager.checkValid(parseObj.getMetadata().getConnectionId());
-                        if (!requestValid) {
-                            responseObserver.onNext(GrpcUtils.convert(new ConnectionUnregisterResponse()));
-                            responseObserver.onCompleted();
-                            return;
-                        }
-                        connectionManager.refreshActiveTime(parseObj.getMetadata().getConnectionId());
-                        Response response = requestHandler.handle(request, parseObj.getMetadata());
-                        responseObserver.onNext(GrpcUtils.convert(response));
-                        responseObserver.onCompleted();
-                        return;
-                    } catch (Exception e) {
-    
-                        Loggers.RPC_DIGEST.error(String
-                                .format("[%s] fail to handle request ,error message :%s", "grpc", e.getMessage(), e));
-                        responseObserver.onNext(GrpcUtils.convert(buildFailResponse("Error")));
+            Request request = (Request) parseObj.getBody();
+            RequestHandler requestHandler = requestHandlerRegistry.getByRequestType(type);
+            if (requestHandler != null) {
+                try {
+                    boolean requestValid = connectionManager.checkValid(parseObj.getMetadata().getConnectionId());
+                    if (!requestValid) {
+                        responseObserver.onNext(GrpcUtils.convert(new ConnectionUnregisterResponse()));
                         responseObserver.onCompleted();
                         return;
                     }
-                } else {
-                    Loggers.RPC_DIGEST.debug(String.format("[%s] no handler for request type : %s :", "grpc", type));
-                    responseObserver.onNext(GrpcUtils.convert(buildFailResponse("RequestHandler Not Found")));
+                    connectionManager.refreshActiveTime(parseObj.getMetadata().getConnectionId());
+                    Response response = requestHandler.handle(request, parseObj.getMetadata());
+                    responseObserver.onNext(GrpcUtils.convert(response));
+                    responseObserver.onCompleted();
+                    return;
+                } catch (Exception e) {
+    
+                    Loggers.REMOTE_DIGEST.error(String
+                            .format("[%s] fail to handle request ,error message :%s", "grpc", e.getMessage(), e));
+                    responseObserver.onNext(GrpcUtils.convert(buildFailResponse("Error")));
                     responseObserver.onCompleted();
                     return;
                 }
+            } else {
+                Loggers.REMOTE_DIGEST.debug(String.format("[%s] no handler for request type : %s :", "grpc", type));
+                responseObserver.onNext(GrpcUtils.convert(buildFailResponse("RequestHandler Not Found")));
+                responseObserver.onCompleted();
+                return;
             }
+            
         }
     }
     
     private Response buildFailResponse(String msg) {
         UnKnowResponse response = new UnKnowResponse();
-        response.setErrorCode(ResponseCode.FAIL.getCode());
-        response.setMessage(msg);
+        response.setErrorInfo(ResponseCode.FAIL.getCode(), msg);
         return response;
     }
     

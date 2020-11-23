@@ -16,22 +16,26 @@
 
 package com.alibaba.nacos.core.remote;
 
+import com.alibaba.nacos.api.common.Constants;
+import com.alibaba.nacos.api.remote.RpcScheduledExecutor;
 import com.alibaba.nacos.api.remote.request.ConnectResetRequest;
+import com.alibaba.nacos.api.remote.request.RequestMeta;
+import com.alibaba.nacos.api.utils.NetUtils;
 import com.alibaba.nacos.common.remote.exception.ConnectionAlreadyClosedException;
 import com.alibaba.nacos.common.utils.StringUtils;
+import com.alibaba.nacos.common.utils.VersionUtils;
 import com.alibaba.nacos.core.monitor.MetricsMonitor;
 import com.alibaba.nacos.core.utils.Loggers;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 
 import javax.annotation.PostConstruct;
+import java.util.ArrayList;
 import java.util.LinkedList;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.Executors;
-import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
 
 /**
@@ -54,10 +58,6 @@ public class ConnectionManager {
     private int loadClient = -1;
     
     String redirectAddress = null;
-    
-    private static final long EXPIRE_MILLSECOND = 10000L;
-    
-    private ScheduledExecutorService executors = Executors.newScheduledThreadPool(1);
     
     @Autowired
     private ClientConnectionEventListenerRegistry clientConnectionEventListenerRegistry;
@@ -84,7 +84,9 @@ public class ConnectionManager {
         Connection connectionInner = connetions.put(connectionId, connection);
         if (connectionInner == null) {
             clientConnectionEventListenerRegistry.notifyClientConnected(connection);
-            Loggers.RPC.info("new connection registered successfully, connectionid = {} ", connectionId);
+            Loggers.REMOTE
+                    .info("new connection registered successfully, connectionid = {},connection={} ", connectionId,
+                            connection);
         }
     }
     
@@ -96,8 +98,8 @@ public class ConnectionManager {
     public void unregister(String connectionId) {
         Connection remove = this.connetions.remove(connectionId);
         if (remove != null) {
-            remove.closeGrapcefully();
-            Loggers.RPC.info(" connection unregistered successfully,connectionid = {} ", connectionId);
+            remove.close();
+            Loggers.REMOTE.info(" connection unregistered successfully,connectionid = {} ", connectionId);
             clientConnectionEventListenerRegistry.notifyClientDisConnected(remove);
         }
     }
@@ -118,15 +120,16 @@ public class ConnectionManager {
      * @param clientIp client ip.
      * @return
      */
-    public Connection getConnectionByIp(String clientIp) {
+    public List<Connection> getConnectionByIp(String clientIp) {
         Set<Map.Entry<String, Connection>> entries = connetions.entrySet();
+        List<Connection> connections = new ArrayList<>();
         for (Map.Entry<String, Connection> entry : entries) {
             Connection value = entry.getValue();
             if (clientIp.equals(value.getMetaInfo().clientIp)) {
-                return value;
+                connections.add(value);
             }
         }
-        return null;
+        return connections;
     }
     
     /**
@@ -157,10 +160,13 @@ public class ConnectionManager {
     public void start() {
         
         // Start UnHeathy Conection Expel Task.
-        executors.scheduleWithFixedDelay(new Runnable() {
+        RpcScheduledExecutor.COMMON_SERVER_EXECUTOR.scheduleWithFixedDelay(new Runnable() {
             @Override
             public void run() {
                 try {
+    
+                    Loggers.REMOTE.info("rpc ack size :{}", RpcAckCallbackSynchronizer.CALLBACK_CONTEXT.size());
+                    ;
     
                     MetricsMonitor.getLongConnectionMonitor().set(connetions.size());
     
@@ -172,8 +178,8 @@ public class ConnectionManager {
                     List<String> expelClient = new LinkedList<String>();
                     for (Map.Entry<String, Connection> entry : entries) {
                         Connection client = entry.getValue();
-                        if (client.isSdkSource() && expelCount > 0) {
-                            expelClient.add(client.getConnectionId());
+                        if (client.getMetaInfo().isSdkSource() && expelCount > 0) {
+                            expelClient.add(client.getMetaInfo().getConnectionId());
                             expelCount--;
                         }
                     }
@@ -185,12 +191,12 @@ public class ConnectionManager {
     
                                 ConnectResetRequest connectResetRequest = new ConnectResetRequest();
                                 if (StringUtils.isNotBlank(redirectAddress) && redirectAddress.contains(":")) {
-                                    String[] split = redirectAddress.split(":");
+                                    String[] split = redirectAddress.split(Constants.COLON);
                                     connectResetRequest.setServerIp(split[0]);
                                     connectResetRequest.setServerPort(split[1]);
                                 }
-                                connection.sendRequestNoAck(connectResetRequest);
-                                Loggers.RPC
+                                connection.request(connectResetRequest, buildMeta());
+                                Loggers.REMOTE
                                         .info("expel connection ,send switch server response connectionid = {},connectResetRequest={} ",
                                                 expeledClientId, connectResetRequest);
                             }
@@ -198,7 +204,7 @@ public class ConnectionManager {
                         } catch (ConnectionAlreadyClosedException e) {
                             unregister(expeledClientId);
                         } catch (Exception e) {
-                            Loggers.RPC.error("error occurs when expel connetion :", expeledClientId, e);
+                            Loggers.REMOTE.error("error occurs when expel connetion :", expeledClientId, e);
                         }
                     }
                     
@@ -209,11 +215,18 @@ public class ConnectionManager {
                     }
                     
                 } catch (Exception e) {
-                    Loggers.RPC.error("error occurs when heathy check... ", e);
+                    Loggers.REMOTE.error("error occurs when heathy check... ", e);
                 }
             }
-        }, 500L, 3000L, TimeUnit.MILLISECONDS);
+        }, 1000L, 3000L, TimeUnit.MILLISECONDS);
         
+    }
+    
+    private RequestMeta buildMeta() {
+        RequestMeta meta = new RequestMeta();
+        meta.setClientVersion(VersionUtils.getFullClientVersion());
+        meta.setClientIp(NetUtils.localIP());
+        return meta;
     }
     
     public void coordinateMaxClientsSmoth(int maxClient) {
@@ -228,25 +241,25 @@ public class ConnectionManager {
     /**
      * send load request to spefic connetionId.
      *
-     * @param connectionId
-     * @param redirectAddress
+     * @param connectionId    connection id of client.
+     * @param redirectAddress server address to redirect.
      */
     public void loadSingle(String connectionId, String redirectAddress) {
         Connection connection = getConnection(connectionId);
         
         if (connection != null) {
             ConnectResetRequest connectResetRequest = new ConnectResetRequest();
-            if (StringUtils.isNotBlank(redirectAddress) && redirectAddress.contains(":")) {
-                String[] split = redirectAddress.split(":");
+            if (StringUtils.isNotBlank(redirectAddress) && redirectAddress.contains(Constants.COLON)) {
+                String[] split = redirectAddress.split(Constants.COLON);
                 connectResetRequest.setServerIp(split[0]);
                 connectResetRequest.setServerPort(split[1]);
             }
             try {
-                connection.sendRequestNoAck(connectResetRequest);
+                connection.request(connectResetRequest, buildMeta());
             } catch (ConnectionAlreadyClosedException e) {
                 unregister(connectionId);
             } catch (Exception e) {
-                Loggers.RPC.error("error occurs when expel connetion :", connectionId, e);
+                Loggers.REMOTE.error("error occurs when expel connetion :", connectionId, e);
             }
         }
         
@@ -299,7 +312,7 @@ public class ConnectionManager {
         for (Map.Entry<String, Connection> entry : connetions.entrySet()) {
             Connection client = entry.getValue();
             try {
-                client.sendRequestNoAck(new ConnectResetRequest());
+                client.request(new ConnectResetRequest(), buildMeta());
             } catch (Exception e) {
                 //Do Nothing.
             }

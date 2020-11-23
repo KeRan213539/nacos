@@ -22,7 +22,9 @@ import com.alibaba.nacos.api.naming.remote.request.ServiceQueryRequest;
 import com.alibaba.nacos.api.naming.remote.response.QueryServiceResponse;
 import com.alibaba.nacos.api.remote.request.RequestMeta;
 import com.alibaba.nacos.core.remote.RequestHandler;
-import com.alibaba.nacos.naming.core.ServiceInfoGenerator;
+import com.alibaba.nacos.naming.core.v2.index.ServiceStorage;
+import com.alibaba.nacos.naming.core.v2.pojo.Service;
+import com.alibaba.nacos.naming.utils.ServiceUtil;
 import org.springframework.stereotype.Component;
 
 /**
@@ -33,22 +35,22 @@ import org.springframework.stereotype.Component;
 @Component
 public class ServiceQueryRequestHandler extends RequestHandler<ServiceQueryRequest, QueryServiceResponse> {
     
-    private final ServiceInfoGenerator serviceInfoGenerator;
+    private final ServiceStorage serviceStorage;
     
-    public ServiceQueryRequestHandler(ServiceInfoGenerator serviceInfoGenerator) {
-        this.serviceInfoGenerator = serviceInfoGenerator;
+    public ServiceQueryRequestHandler(ServiceStorage serviceStorage) {
+        this.serviceStorage = serviceStorage;
     }
     
     @Override
     public QueryServiceResponse handle(ServiceQueryRequest request, RequestMeta meta) throws NacosException {
-        ServiceQueryRequest queryRequest = (ServiceQueryRequest) request;
-        String namespaceId = queryRequest.getNamespace();
-        String serviceName = queryRequest.getServiceName();
-        String cluster = null == queryRequest.getCluster() ? "" : queryRequest.getCluster();
-        boolean healthyOnly = queryRequest.isHealthyOnly();
-        ServiceInfo result = serviceInfoGenerator
-                .generateServiceInfo(namespaceId, serviceName, cluster, healthyOnly, meta.getClientIp());
+        String namespaceId = request.getNamespace();
+        String groupName = request.getGroupName();
+        String serviceName = request.getServiceName();
+        Service service = Service.newService(namespaceId, groupName, serviceName);
+        String cluster = null == request.getCluster() ? "" : request.getCluster();
+        boolean healthyOnly = request.isHealthyOnly();
+        ServiceInfo result = serviceStorage.getData(service);
+        result = ServiceUtil.selectInstances(result, cluster, healthyOnly, true);
         return QueryServiceResponse.buildSuccessResponse(result);
     }
-    
 }

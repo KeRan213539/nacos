@@ -16,15 +16,8 @@
 
 package com.alibaba.nacos.core.remote;
 
-import com.alibaba.nacos.api.exception.NacosException;
-import com.alibaba.nacos.api.remote.RemoteConstants;
-import com.alibaba.nacos.api.remote.RequestCallBack;
-import com.alibaba.nacos.api.remote.RequestFuture;
-import com.alibaba.nacos.api.remote.request.Request;
-import com.alibaba.nacos.api.remote.response.Response;
+import com.alibaba.nacos.api.remote.Requester;
 import org.apache.commons.lang3.builder.ToStringBuilder;
-
-import java.util.Map;
 
 /**
  * Connection.
@@ -33,7 +26,7 @@ import java.util.Map;
  * @version $Id: Connection.java, v 0.1 2020年07月13日 7:08 PM liuzunfei Exp $
  */
 @SuppressWarnings("PMD.AbstractClassShouldStartWithAbstractNamingRule")
-public abstract class Connection {
+public abstract class Connection implements Requester {
     
     private final ConnectionMetaInfo metaInfo;
     
@@ -42,68 +35,17 @@ public abstract class Connection {
     }
     
     /**
-     * Send response to this client that associated to this connection.
+     * check is connected.
      *
-     * @param request request
+     * @return
      */
-    public abstract Response sendRequest(Request request, long timeoutMills) throws NacosException;
-    
-    /**
-     * Send response to this client that associated to this connection.
-     *
-     * @param request request
-     */
-    public abstract void sendRequestNoAck(Request request) throws NacosException;
-    
-    /**
-     * Send response to this client that associated to this connection.
-     *
-     * @param request request.
-     */
-    public abstract RequestFuture sendRequestWithFuture(Request request) throws NacosException;
-    
-    /**
-     * Send response to this client that associated to this connection.
-     *
-     * @param request request.
-     */
-    public abstract void sendRequestWithCallBack(Request request, RequestCallBack callBack)
-            throws NacosException;
-    
-    /**
-     * Close this connection, if this connection is not active yet.
-     */
-    public abstract void closeGrapcefully();
+    public abstract boolean isConnected();
     
     /**
      * Update last Active Time to now.
      */
     public void freshActiveTime() {
         metaInfo.setLastActiveTime(System.currentTimeMillis());
-    }
-    
-    /**
-     * return last active time, include request occurs and.
-     *
-     * @return
-     */
-    public long getLastActiveTimestamp() {
-        return metaInfo.lastActiveTime;
-    }
-    
-    public String getConnectionId() {
-        return metaInfo.connectionId;
-    }
-    
-    /**
-     * check if this connection is sdk source.
-     *
-     * @return if this connection is sdk source.
-     */
-    public boolean isSdkSource() {
-        Map<String, String> labels = metaInfo.labels;
-        String source = labels.get(RemoteConstants.LABEL_SOURCE);
-        return RemoteConstants.LABEL_SOURCE_SDK.equalsIgnoreCase(source);
     }
     
     /**

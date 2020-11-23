@@ -16,8 +16,6 @@
 
 package com.alibaba.nacos.api.naming.remote.request;
 
-import com.alibaba.nacos.api.naming.remote.NamingRemoteConstants;
-
 /**
  * Nacos naming subscribe service request.
  *
@@ -32,8 +30,9 @@ public class SubscribeServiceRequest extends AbstractNamingRequest {
     public SubscribeServiceRequest() {
     }
     
-    public SubscribeServiceRequest(String namespace, String serviceName, String clusters, boolean subscribe) {
-        super(namespace, serviceName, null);
+    public SubscribeServiceRequest(String namespace, String groupName, String serviceName, String clusters,
+            boolean subscribe) {
+        super(namespace, serviceName, groupName);
         this.clusters = clusters;
         this.subscribe = subscribe;
     }

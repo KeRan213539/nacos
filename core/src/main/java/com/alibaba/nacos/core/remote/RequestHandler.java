@@ -22,22 +22,34 @@ import com.alibaba.nacos.api.remote.request.RequestMeta;
 import com.alibaba.nacos.api.remote.response.Response;
 import org.springframework.beans.factory.annotation.Autowired;
 
-import javax.annotation.PostConstruct;
-
 /**
  * Nacos based request handler.
  *
  * @author liuzunfei
  * @author xiweng.yy
  */
+@SuppressWarnings("PMD.AbstractClassShouldStartWithAbstractNamingRule")
 public abstract class RequestHandler<T extends Request, S extends Response> {
     
     @Autowired
-    private RequestHandlerRegistry requestHandlerRegistry;
+    private RequestFilters requestFilters;
     
-    @PostConstruct
-    public void init() {
-        requestHandlerRegistry.registryHandler(this);
+    /**
+     * Handler request.
+     *
+     * @param request request
+     * @param meta    request meta data
+     * @return response
+     * @throws NacosException nacos exception when handle request has problem.
+     */
+    public Response handleRequest(T request, RequestMeta meta) throws NacosException {
+        for (AbstractRequestFilter filter : requestFilters.filters) {
+            Response filterResult = filter.filter(request, meta, this.getClass());
+            if (filterResult != null && !filterResult.isSuccess()) {
+                return filterResult;
+            }
+        }
+        return handle(request, meta);
     }
     
     /**
