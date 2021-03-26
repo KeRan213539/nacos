@@ -17,6 +17,8 @@
 package com.alibaba.nacos.api.naming.utils;
 
 import com.alibaba.nacos.api.common.Constants;
+import com.alibaba.nacos.api.exception.NacosException;
+import com.alibaba.nacos.api.naming.pojo.Instance;
 import com.alibaba.nacos.api.utils.StringUtils;
 
 /**
@@ -43,6 +45,9 @@ public class NamingUtils {
     public static String getGroupedName(final String serviceName, final String groupName) {
         if (StringUtils.isBlank(serviceName)) {
             throw new IllegalArgumentException("Param 'serviceName' is illegal, serviceName is blank");
+        }
+        if (StringUtils.isBlank(groupName)) {
+            throw new IllegalArgumentException("Param 'groupName' is illegal, groupName is blank");
         }
         final String resultGroupedName = groupName + Constants.SERVICE_INFO_SPLITER + serviceName;
         return resultGroupedName.intern();
@@ -71,9 +76,9 @@ public class NamingUtils {
     /**
      * check combineServiceName format. the serviceName can't be blank.
      * <pre>
-     * serviceName = "@@"; the length = 0; illegal
-     * serviceName = "group@@"; the length = 1; illegal
-     * serviceName = "@@serviceName"; the length = 2; legal
+     * serviceName = "@@";                 the length = 0; illegal
+     * serviceName = "group@@";            the length = 1; illegal
+     * serviceName = "@@serviceName";      the length = 2; illegal
      * serviceName = "group@@serviceName"; the length = 2; legal
      * </pre>
      *
@@ -85,11 +90,15 @@ public class NamingUtils {
             throw new IllegalArgumentException(
                     "Param 'serviceName' is illegal, it should be format as 'groupName@@serviceName'");
         }
+        if (split[0].isEmpty()) {
+            throw new IllegalArgumentException("Param 'serviceName' is illegal, groupName can't be empty");
+        }
     }
     
     /**
      * Returns a combined string with serviceName and groupName. Such as 'groupName@@serviceName'
-     * <p>This method works similar with {@link com.alibaba.nacos.api.naming.utils.NamingUtils#getGroupedName} But not verify any parameters.
+     * <p>This method works similar with {@link com.alibaba.nacos.api.naming.utils.NamingUtils#getGroupedName} But not
+     * verify any parameters.
      *
      * </p> etc:
      * <p>serviceName | groupName | result</p>
@@ -101,5 +110,24 @@ public class NamingUtils {
      */
     public static String getGroupedNameOptional(final String serviceName, final String groupName) {
         return groupName + Constants.SERVICE_INFO_SPLITER + serviceName;
+    }
+    
+    /**
+     * <p>Check instance param about keep alive.</p>
+     *
+     * <pre>
+     * heart beat timeout must > heart beat interval
+     * ip delete timeout must  > heart beat interval
+     * </pre>
+     *
+     * @param instance need checked instance
+     * @throws NacosException if check failed, throw exception
+     */
+    public static void checkInstanceIsLegal(Instance instance) throws NacosException {
+        if (instance.getInstanceHeartBeatTimeOut() < instance.getInstanceHeartBeatInterval()
+                || instance.getIpDeleteTimeout() < instance.getInstanceHeartBeatInterval()) {
+            throw new NacosException(NacosException.INVALID_PARAM,
+                    "Instance 'heart beat interval' must less than 'heart beat timeout' and 'ip delete timeout'.");
+        }
     }
 }
